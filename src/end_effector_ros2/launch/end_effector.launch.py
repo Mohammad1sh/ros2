@@ -56,6 +56,10 @@ def generate_launch_description():
             description='can_node bu makinede başlasın (false = mini PC üzerinde çalışıyor)'),
         DeclareLaunchArgument('start_vision',     default_value='true',
             description='vision_node bu makinede başlasın (false = mini PC üzerinde çalışıyor)'),
+        DeclareLaunchArgument('start_gui',        default_value='true',
+            description='gui_node (arayüz) bu makinede başlasın (mini PC=true, laptop=false)'),
+        DeclareLaunchArgument('start_logic',      default_value='true',
+            description='logic_node (görev mantığı) bu makinede başlasın (mini PC=true, laptop=false)'),
     ]
 
     # ── vision_node ───────────────────────────────────────────────────────
@@ -91,11 +95,14 @@ def generate_launch_description():
     )
 
     # ── logic_node ────────────────────────────────────────────────────────
+    # DAĞITIK: mini PC'de çalışır (arayüz+mantık orada). Laptop sadece kol
+    # simülasyonu (gazebo_bridge) çalıştırır → start_logic:=false verir.
     logic = Node(
         package='end_effector_ros2',
         executable='logic_node',
         name='logic_node',
         output='screen',
+        condition=IfCondition(LaunchConfiguration('start_logic')),
         parameters=[{
             'simulation':     LaunchConfiguration('simulation'),
             'use_real_robot': LaunchConfiguration('use_real_robot'),
@@ -103,11 +110,13 @@ def generate_launch_description():
     )
 
     # ── gui_node ──────────────────────────────────────────────────────────
+    # DAĞITIK: arayüz mini PC'de açılır → start_gui:=false laptopta.
     gui = Node(
         package='end_effector_ros2',
         executable='gui_node',
         name='gui_node',
         output='screen',
+        condition=IfCondition(LaunchConfiguration('start_gui')),
         parameters=[{
             'use_real_robot': LaunchConfiguration('use_real_robot'),
             'simulation':     LaunchConfiguration('simulation'),
