@@ -14,6 +14,15 @@ WS="$HOME/ros2-end-effector"
 source /opt/ros/humble/setup.bash
 source "$WS/install/setup.bash"
 
+# ÖNCEKİ oturumdan kalan süreçleri temizle — yoksa eski zenoh 7447 portunu
+# tutar, yeni köprü "address in use" ile ölür ve script exit 1 ile durur
+# (can_node/vision_node hiç başlamaz). Bu, veri akmamasının en sık sebebi.
+echo "[TEMİZLİK] Eski süreçler kapatılıyor..."
+pkill -f zenoh-bridge-ros2dds 2>/dev/null
+pkill -f 'end_effector_ros2 can_node' 2>/dev/null
+pkill -f 'end_effector_ros2 vision_node' 2>/dev/null
+sleep 2
+
 # Mini PC native Ubuntu — VARSAYILAN DDS keşfi yeterli (loopback XML
 # sadece laptop'taki WSL için gerekliydi). Böylece can_node, vision_node
 # ve zenoh köprüsü birbirini garantili bulur.
