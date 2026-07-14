@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+"""
+end_effector.launch.py
+======================
+Tüm End Effector ROS2 düğümlerini başlatır (Gazebo hariç).
+
+Kullanım:
+  ros2 launch end_effector_ros2 end_effector.launch.py
+  ros2 launch end_effector_ros2 end_effector.launch.py simulation:=true use_gazebo:=true
+Parametreler:
+  simulation        (bool,   default: false) — CAN simülasyon modu
+  use_gazebo_cam    (bool,   default: false) — Gazebo kamerasını kullan
+  use_gazebo        (bool,   default: false) — gazebo_bridge başlat (IK dahil)
+  can_port          (string, default: /dev/ttyUSB0)
+  baudrate          (int,    default: 2000000)
+  model_name        (string, default: YOLO26s.pt)
+  camera_index      (int,    default: 0)
+  stream_fps        (int,    default: 30)
+  use_real_robot    (bool,   default: false) — logic_node: DSR_ROBOT2 ile gerçek robot
+
+Sıra:
+  Terminal 1: ros2 launch end_effector_ros2 gazebo.launch.py spawn_car:=true
+  Terminal 2: ros2 launch end_effector_ros2 end_effector.launch.py simulation:=true use_gazebo:=true
+"""
+
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, LogInfo
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
+
+def generate_launch_description():
+
+    # ── Argümanlar ────────────────────────────────────────────────────────
+    args = [
+        DeclareLaunchArgument('simulation',       default_value='false',
+            description='CAN Bus simülasyon modu'),
+        DeclareLaunchArgument('use_gazebo_cam',   default_value='false',
+            description='Gazebo kamerasını kullan'),
+        DeclareLaunchArgument('use_gazebo',       default_value='false',
+            description='gazebo_bridge düğümünü başlat'),
+        DeclareLaunchArgument('can_port',         default_value='/dev/ttyUSB0',
+            description='CAN Bus seri port'),
+        DeclareLaunchArgument('baudrate',         default_value='2000000',
+            description='CAN baudrate'),
+        DeclareLaunchArgument('model_name',       default_value='latest.pt',
+            description='YOLO model dosya adı'),
+        DeclareLaunchArgument('camera_index',     default_value='0',
+            description='USB kamera indeksi'),
+        DeclareLaunchArgument('stream_fps',       default_value='30',
+            description='Kamera FPS'),
+        DeclareLaunchArgument('use_real_robot',   default_value='false',
+            description='logic_node: DSR_ROBOT2 ile gerçek robot hareketi (false=Gazebo IK)'),
+        DeclareLaunchArgument('start_can',        default_value='true',
+            description='can_node bu makinede başlasın (false = mini PC üzerinde çalışıyor)'),
+        DeclareLaunchArgument('start_vision',     default_value='true',
+            description='vision_node bu makinede başlasın (false = mini PC üzerinde çalışıyor)'),
+    ]
+
+    # ── vision_node ───────────────────────────────────────────────────────
+    vision = Node(
+        package='end_effector_ros2',
+        executable='vision_node',
+        name='vision_node',
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('start_vision')),
+        parameters=[{
+            'model_name':     LaunchConfiguration('model_name'),
+            'camera_index':   LaunchConfiguration('camera_index'),
+            'stream_fps':     LaunchConfiguration('stream_fps'),
+            'use_gazebo_cam': LaunchConfiguration('use_gazebo_cam'),
+        }],
+    )
+
+    # ── can_node ──────────────────────────────────────────────────────────
+    can = Node(
+        package='end_effector_ros2',
+        executable='can_node',
+        name='can_node',
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('start_can')),
+        parameters=[{
+            'port':         LaunchConfiguration('can_port'),
+            'baudrate':     LaunchConfiguration('baudrate'),
+            'simulation':   LaunchConfiguration('simulation'),
+            'use_dsr2':     False,
+            'use_soem':     False,
+            'publish_rate': 10.0,
+        }],
+    )
+
+    # ── logic_node ────────────────────────────────────────────────────────
+    logic = Node(
+        package='end_effector_ros2',
+        executable='logic_node',
+        name='logic_node',
+        output='screen',
+        parameters=[{
+            'simulation':     LaunchConfiguration('simulation'),
+            'use_real_robot': LaunchConfiguration('use_real_robot'),
+        }],
+    )
+
+    # ── gui_node ──────────────────────────────────────────────────────────
+    gui = Node(
+        package='end_effector_ros2',
+        executable='gui_node',
+        name='gui_node',
+        output='screen',
+        parameters=[{
+            'use_real_robot': LaunchConfiguration('use_real_robot'),
+            'simulation':     LaunchConfiguration('simulation'),
+        }],
+    )
+
+    # ── gazebo_bridge — use_gazebo:=true ise ─────────────────────────────
+    gazebo_bridge = Node(
+        package='end_effector_ros2',
+        executable='gazebo_bridge',
+        name='gazebo_bridge',
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('use_gazebo')),
+        parameters=[{
+            # simulation:=false (uzak gerçek donanım) → sahte load cell yayınlama
+            'simulation': LaunchConfiguration('simulation'),
+        }],
+    )
+
+    log = LogInfo(msg=[
+        '\n',
+        '╔══════════════════════════════════════════╗\n',
+        '║   End Effector ROS2 Sistemi Başlatıldı   ║\n',
+        '╚══════════════════════════════════════════╝\n',
+        '  simulation      : ', LaunchConfiguration('simulation'),       '\n',
+        '  use_gazebo      : ', LaunchConfiguration('use_gazebo'),       '\n',
+        '  use_gazebo_cam  : ', LaunchConfiguration('use_gazebo_cam'),   '\n',
+        '  can_port        : ', LaunchConfiguration('can_port'),         '\n',
+        '  model_name      : ', LaunchConfiguration('model_name'),       '\n',
+        '  use_real_robot  : ', LaunchConfiguration('use_real_robot'),   '\n',
+    ])
+
+    return LaunchDescription([
+        *args,
+        log,
+        vision,
+        can,
+        logic,
+        gui,
+        gazebo_bridge,
+    ])
