@@ -17,28 +17,21 @@ WS="$HOME/ros2-end-effector"
 source /opt/ros/humble/setup.bash
 source "$WS/install/setup.bash"
 
-# DDS her zaman LOKAL (loopback) — makineler arası taşımayı zenoh yapar
+# DDS: VARSAYILAN CycloneDDS. Eski loopback XML (unicast peer / multicast
+# kapalı) WSL'de node'ları asıyordu — ros2 launch'ın ayrı process'leri
+# birbirini bulamıyordu. Varsayılan CycloneDDS ile inter-process keşif
+# sorunsuz çalışıyor (test edildi). Makineler arası taşımayı zenoh yapar;
+# WSL zaten LAN'a L2 erişemediği için mini PC ile doğrudan DDS keşfi olmaz.
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-cat > "$HOME/cyclonedds.xml" <<'EOF'
-<?xml version="1.0" encoding="UTF-8" ?>
-<CycloneDDS xmlns="https://cdds.io/config">
-  <Domain id="any">
-    <General>
-      <Interfaces><NetworkInterface name="lo" presence_required="false"/></Interfaces>
-      <AllowMulticast>false</AllowMulticast>
-    </General>
-    <Discovery>
-      <Peers><Peer address="127.0.0.1"/></Peers>
-      <ParticipantIndex>auto</ParticipantIndex>
-      <MaxAutoParticipantIndex>50</MaxAutoParticipantIndex>
-    </Discovery>
-  </Domain>
-</CycloneDDS>
-EOF
-export CYCLONEDDS_URI="file://$HOME/cyclonedds.xml"
-echo "[DDS] Domain ID: $ROS_DOMAIN_ID | CycloneDDS (loopback)"
+unset CYCLONEDDS_URI
+rm -f "$HOME/cyclonedds.xml" 2>/dev/null
+echo "[DDS] Domain ID: $ROS_DOMAIN_ID | CycloneDDS (varsayılan)"
 
 ZENOH_PID=""
+# Önceki oturumdan kalan zenoh köprüsü 7447'yi tutarsa yeni köprü
+# "address in use" ile ölür → bu temizlik onu engeller.
+pkill -9 -f zenoh-bridge-ros2dds 2>/dev/null && sleep 1
+
 if [ -n "$MINI_PC_IP" ]; then
     echo "[MOD] UZAK GERÇEK DONANIM — mini PC: $MINI_PC_IP (kamera+CAN orada)"
 
