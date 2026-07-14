@@ -870,14 +870,20 @@ def main(args=None):
     app=QApplication(sys.argv); app.setStyle('Fusion')
     win=MainWindow(ros_node,bridge,dsr2,is_sim_can=is_sim_can); win.showMaximized()
 
-    # QTimer ile spin_once - her 50ms'de callbacks isle
-    ros_timer = QTimer()
-    ros_timer.timeout.connect(lambda: rclpy.spin_once(ros_node, timeout_sec=0.04))
-    ros_timer.start(50)
+    # ROS aboneliklerini AYRI thread'de sürekli işle. Önceki QTimer+spin_once
+    # yaklaşımı tek callback/tik işliyordu → load cell / kamera / can_status
+    # abonelikleri veri alamıyordu (yayınlar etkilenmiyordu, o yüzden butonlar
+    # çalışıyor ama veri gelmiyordu). MultiThreadedExecutor tüm callback'leri
+    # gerçek zamanlı işler. Qt'ye geçiş pyqtSignal ile thread-safe.
+    executor = MultiThreadedExecutor()
+    executor.add_node(ros_node)
+    spin_thread = threading.Thread(target=executor.spin, daemon=True)
+    spin_thread.start()
 
     try:
         ret=app.exec()
     finally:
+        executor.shutdown()
         ros_node.destroy_node()
         rclpy.shutdown()
     sys.exit(ret)
