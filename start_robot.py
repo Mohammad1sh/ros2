@@ -162,12 +162,19 @@ def wait_for_service(app, service='/dsr01/motion/move_line', timeout=35):
 def main():
     app = QApplication(sys.argv)
 
-    dlg = StartupDialog()
-    if dlg.exec() != QDialog.DialogCode.Accepted:
-        sys.exit(0)
-
-    mode = dlg.mode
-    ip   = dlg.robot_ip
+    # DAĞITIK MİNİ PC: mod seçim penceresini atla, doğrudan CAN Donanım
+    # modunda aç (gui+logic+can+vision TEK proseste → DDS inter-process
+    # keşfi gerekmez, load cell/kamera abonelikleri sorunsuz çalışır).
+    auto = os.environ.get('MINIPC_AUTO_MODE', '').strip().lower()
+    if auto == 'can':
+        mode = MODE_CAN
+        ip   = '192.168.137.100'
+    else:
+        dlg = StartupDialog()
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            sys.exit(0)
+        mode = dlg.mode
+        ip   = dlg.robot_ip
 
     procs = []
 

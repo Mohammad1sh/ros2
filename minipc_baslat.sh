@@ -39,12 +39,13 @@ ZENOH_PID=$!
 sleep 2
 kill -0 $ZENOH_PID 2>/dev/null || { echo "[ZENOH] BAŞLAMADI! /tmp/zenoh_bridge.log"; exit 1; }
 
-# ── ARAYÜZ + GERÇEK DONANIM (gazebo_bridge YOK — o laptopta) ──
-echo "[MİNİ PC] Arayüz + gerçek donanım başlatılıyor (gui+logic+can+vision)..."
-ros2 launch end_effector_ros2 end_effector.launch.py \
-    simulation:=false use_gazebo:=false use_real_robot:=false \
-    start_gui:=true start_logic:=true start_can:=true start_vision:=true \
-    can_port:=/dev/ttyUSB0 model_name:=latest.pt &
+# ── ARAYÜZ + GERÇEK DONANIM — TEK PROSES (start_robot.py CAN modu) ──
+# ros2 launch (ayrı prosesler) mini PC'de DDS inter-process asimetrisi
+# yaratıyordu (buton çalışıyor ama load cell/kamera abonelikleri veri
+# almıyordu). start_robot.py tüm düğümleri TEK proseste + MultiThreadedExecutor
+# ile çalıştırır → DDS keşfi gerekmez, tüm veri sorunsuz akar.
+echo "[MİNİ PC] Arayüz + gerçek donanım başlatılıyor (TEK PROSES)..."
+MINIPC_AUTO_MODE=can python3 "$WS/start_robot.py" &
 APP_PID=$!
 
 trap "kill $APP_PID $ZENOH_PID 2>/dev/null" INT TERM EXIT
