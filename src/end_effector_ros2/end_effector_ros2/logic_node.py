@@ -75,19 +75,19 @@ Z_MIN_HEIGHT        = 0.08    # m  — temas arama alt sınırı (eşik yüzeyi 
 Z_RETRACT_HEIGHT    = 0.45    # m  — görev sonrası güvenli geri çekilme
 
 # ── Çalışma noktaları (Blender'da ölçülen GERÇEK koordinatlar) ──────────────
-# Tarama/kamera pozu: (-0.60, 0.73, 0.75)
-# Şerit: (-0.65, 0.19, ~0.12) → (-0.65, 0.92, ~0.12)
-WORK_POS_X = -0.60    # m — tarama noktası X (kamera burada açılır)
-WORK_POS_Y =  0.73    # m — tarama noktası Y
-AREA_X_MIN = -0.70    # m
-AREA_X_MAX = -0.60    # m
-AREA_Y_MIN =  0.19    # m — şerit BAŞI
-AREA_Y_MAX =  0.92    # m — şerit SONU
+# Araba yeni konumu (Gazebo GUI, 2026-07-16): (-0.52, 0.78, 0.27)
+# Eski araba konumu: (-0.4, 1.5, 0.27) → delta (-0.12, -0.72, 0) tüm noktalara uygulandı
+WORK_POS_X = -0.72    # m — tarama noktası X (kamera burada açılır)
+WORK_POS_Y =  0.01    # m — tarama noktası Y
+AREA_X_MIN = -0.82    # m
+AREA_X_MAX = -0.72    # m
+AREA_Y_MIN = -0.53    # m — şerit BAŞI
+AREA_Y_MAX =  0.20    # m — şerit SONU
 SANDER_RADIUS_M = 0.05    # m  — zımpara diski yarıçapı (10cm çap / 2)
 
-# Zımpara geçişi: TEK DÜZ ŞERİT — 3D başlangıç → bitiş (Blender ölçümleri)
-STRIP_START = (-0.65, 0.19, 0.12)   # şerit başı (iniş burada yapılır)
-STRIP_END   = (-0.60, 0.85, 0.09)   # şerit sonu (x/y/z birlikte interpolasyon)
+# Zımpara geçişi: TEK DÜZ ŞERİT — 3D başlangıç → bitiş (araba konum deltası uygulandı)
+STRIP_START = (-0.77, -0.53, 0.12)   # şerit başı (iniş burada yapılır)
+STRIP_END   = (-0.72,  0.13, 0.09)   # şerit sonu (x/y/z birlikte interpolasyon)
 SILL_X           = STRIP_START[0]   # (eski referanslar için)
 SWEEP_STEP_M     = 0.05   # m — şerit üzerindeki ara nokta aralığı
 SWEEP_POINT_WAIT = 1.2    # s — ara noktalar arası bekleme
@@ -583,25 +583,28 @@ class LogicNode(Node):
         # ── Tespit özeti (hareket planı: eşik boyunca TEK DÜZ ŞERİT) ───────
         clusters = self._cluster_burrs(captured)
         self._log(f'Tespit: {len(captured)} çapak → {len(clusters)} bölge '
-                  f'— eşik boyunca tek şerit zımparalanacak')
+                  f'— her bölge AYRI AYRI in→zımparala→kalk ile işlenecek')
         self.mission_active = True
 
-        if captured and self.mission_active and not self.emergency:
-            label = 'ŞERİT'
+        total = len(clusters)
+        for i, cl in enumerate(clusters, start=1):
+            if not self.mission_active or self.emergency:
+                break
+            label = f'ÇAPAK {i}/{total}'
 
-            # D1. Şeridin BAŞ ucuna git — önce alçak yaklaşma yüksekliğine
-            self._hover_to(label, STRIP_START[0], STRIP_START[1],
-                           dx_m=STRIP_START[0] - WORK_POS_X,
-                           dy_m=STRIP_START[1] - WORK_POS_Y,
+            # D1. Bu çapak bölgesinin üstüne hizalan (alçak yaklaşma yüksekliği)
+            self._hover_to(label, cl['cx'], cl['cy'],
+                           dx_m=cl['cx'] - WORK_POS_X,
+                           dy_m=cl['cy'] - WORK_POS_Y,
                            z=Z_STRIP_HOVER)
 
             # D2. Load cell toplamı 25N olana kadar aşağı in
             ok = self._phase_z_descend(label)
             if ok:
-                # D3. Zımpara AÇIK — diğer uca kadar DÜZ şerit
-                self._phase_sweep(label)
+                # D3. Zımpara AÇIK — yerinde zımparala
+                self._phase_grind(label, cl)
 
-            # D4. GERİ ÇEK
+            # D4. GERİ ÇEK — sonraki çapağa geçmeden yukarı kalk
             self._retract(label)
 
         self.mission_active = False

@@ -24,7 +24,7 @@
   <xacro:arg name="namespace" default=""/>
   <xacro:arg name="simple"    default="true"/>
   <!-- true = 17MB CAD montajı (yavaş), false = hafif basit geometri (hızlı) -->
-  <xacro:arg name="detailed_sander" default="false"/>
+  <xacro:arg name="detailed_sander" default="true"/>
 
   <xacro:include filename="$(find dsr_description2)/xacro/h2515.urdf.xacro" />
 

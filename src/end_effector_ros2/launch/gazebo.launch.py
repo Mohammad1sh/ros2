@@ -107,7 +107,7 @@ def generate_launch_description():
         arguments=[
             '-name', 'arac_sase',
             '-file', os.path.join(pkg_share, 'models', 'arac_sase', 'model.sdf'),
-            '-x', '-0.4', '-y', '1.5', '-z', '0.27',
+            '-x', '-0.52', '-y', '0.78', '-z', '0.27',
         ],
         condition=IfCondition(LaunchConfiguration('spawn_car')),
     )
