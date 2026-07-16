@@ -74,20 +74,19 @@ Z_STRIP_HOVER       = 0.30    # m  — şerit başına yaklaşma yüksekliği (h
 Z_MIN_HEIGHT        = 0.08    # m  — temas arama alt sınırı (eşik yüzeyi ~0.12m)
 Z_RETRACT_HEIGHT    = 0.45    # m  — görev sonrası güvenli geri çekilme
 
-# ── Çalışma noktaları (Blender'da ölçülen GERÇEK koordinatlar) ──────────────
-# Araba yeni konumu (Gazebo GUI, 2026-07-16): (-0.52, 0.78, 0.27)
-# Eski araba konumu: (-0.4, 1.5, 0.27) → delta (-0.12, -0.72, 0) tüm noktalara uygulandı
-WORK_POS_X = -0.72    # m — tarama noktası X (kamera burada açılır)
-WORK_POS_Y =  0.01    # m — tarama noktası Y
-AREA_X_MIN = -0.82    # m
-AREA_X_MAX = -0.72    # m
+# ── Çalışma noktaları (Blender gazebo_sahne.blend'de KULLANICI konumladı, 2026-07-16) ──
+# Araba: (-0.52, 0.78, 0.27) yaw=0. İşaretçiler eşiğin tam üstüne yerleştirildi.
+WORK_POS_X = -0.70    # m — tarama noktası X (kamera burada açılır)
+WORK_POS_Y = -0.13    # m — tarama noktası Y
+AREA_X_MIN = -0.74    # m
+AREA_X_MAX = -0.68    # m
 AREA_Y_MIN = -0.53    # m — şerit BAŞI
-AREA_Y_MAX =  0.20    # m — şerit SONU
+AREA_Y_MAX =  0.25    # m — şerit SONU
 SANDER_RADIUS_M = 0.05    # m  — zımpara diski yarıçapı (10cm çap / 2)
 
-# Zımpara geçişi: TEK DÜZ ŞERİT — 3D başlangıç → bitiş (araba konum deltası uygulandı)
-STRIP_START = (-0.77, -0.53, 0.12)   # şerit başı (iniş burada yapılır)
-STRIP_END   = (-0.72,  0.13, 0.09)   # şerit sonu (x/y/z birlikte interpolasyon)
+# Zımpara geçişi: TEK DÜZ ŞERİT — Blender ESIK_BASI/ESIK_SONU işaretçilerinden
+STRIP_START = (-0.68, -0.53, 0.14)   # şerit başı (iniş burada yapılır)
+STRIP_END   = (-0.69,  0.18, 0.14)   # şerit sonu (x/y/z birlikte interpolasyon)
 SILL_X           = STRIP_START[0]   # (eski referanslar için)
 SWEEP_STEP_M     = 0.05   # m — şerit üzerindeki ara nokta aralığı
 SWEEP_POINT_WAIT = 1.2    # s — ara noktalar arası bekleme
