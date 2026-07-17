@@ -167,27 +167,41 @@ def to_park(from_y=None):
 def bekle_25N(label, pose):
     """gercek load cell 25N olana kadar bekle (DUVAR saati, sicrama filtresi).
     Beklerken pozu tutmaya devam eder."""
-    log_gui(f'{label}: 25N TEMAS BEKLENIYOR — load cell\'e bastir! (F={state["force"]:.1f}N)')
-    t0 = time.time(); last_p = -1; ardarda = 0
+    # --- OTOMATIK DARA ---------------------------------------------------
+    # Mini PC'nin tare'i kendi gorevi disinda calismiyor; ham okuma bosta
+    # yuzlerce "N" gorunebiliyor. Cozum: 1.5 sn bosta ornek al, medyani
+    # sifir kabul et; temas karari FARKA (dara ustu net kuvvet) gore verilir.
+    # Dara toplamsal oldugu icin olcek bozulmaz: fark gercek Newton'dur.
+    log_gui(f'{label}: dara aliniyor — load cell\'e HENUZ BASTIRMA (1.5 sn)')
+    orn = []
+    td = time.time()
+    while time.time() - td < 1.5:
+        send(pose); rclpy.spin_once(n, timeout_sec=0.05)
+        orn.append(state['force'])
+    orn.sort(); dara = orn[len(orn)//2] if orn else 0.0
+    log_gui(f'{label}: dara={dara:.1f} alindi -> SIMDI BASTIR (hedef: dara ustune +25..+50N)')
+    t0 = time.time(); last_p = -1; ardarda = 0; son_uyari = 0.0
     while time.time() - t0 < 90.0:
         if state['emergency']: return False
         send(pose)                      # pozu tut
         rclpy.spin_once(n, timeout_sec=0.05)
-        f = state['force']
-        if f > 50.0:                    # 50N ustu mini PC'nin ACIL DURUM esigi — sayma, uyar
+        d = state['force'] - dara       # dara ustu NET kuvvet
+        if d > 50.0:                    # cok sert — sayma; uyariyi 2 sn'de bir bas
             ardarda = 0
-            log_gui(f'{label}: COK SERT ({f:.1f}N)! 25-50N arasi bastir — 50N ustu ACIL DURUM tetikler')
-        elif f >= FORCE_N:              # gecerli temas bandi: 25-50N
+            if time.time() - son_uyari > 2.0:
+                son_uyari = time.time()
+                log_gui(f'{label}: COK SERT (net +{d:.1f}N)! biraz gevset — hedef +25..+50N')
+        elif d >= FORCE_N:              # gecerli temas bandi: +25..+50N
             ardarda += 1
             if ardarda >= 3:            # 3 ardisik okuma: gercek temas
-                log_gui(f'{label}: TEMAS ✓ {f:.1f}N — zimpara basliyor!')
+                log_gui(f'{label}: TEMAS ✓ net +{d:.1f}N — zimpara basliyor!')
                 return True
         else:
             ardarda = 0
         el = int(time.time() - t0)
         if el // 5 != last_p:
             last_p = el // 5
-            log_gui(f'   bekleniyor... F={state["force"]:.1f}N ({el}sn/90sn)')
+            log_gui(f'   bekleniyor... net +{state["force"]-dara:.1f}N ({el}sn/90sn)')
     log_gui(f'{label}: 25N gelmedi (90sn) — yine de devam ediliyor')
     return True
 
