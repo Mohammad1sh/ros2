@@ -58,11 +58,22 @@ FORCE_N      = 25.0          # zimpara baslama sarti (gercek load cell, Newton)
 FORCE_WAIT_S = 120.0         # 25N bekleme ust siniri (sim-sn); dolarsa uyariyla devam
 DISK_R       = 0.05          # disk yaricapi (kumeleme icin)
 
-state = {'emergency': False, 'start': False, 'dets': [], 'force': 0.0}
+state = {'emergency': False, 'stop': False, 'start': False, 'dets': [],
+         'force': 0.0, 'y_son': None, 'lvl': 'HIGH'}
 n.create_subscription(Bool, '/end_effector/mission_start',
                       lambda m: state.__setitem__('start', state['start'] or m.data), 10)
 n.create_subscription(Bool, '/end_effector/emergency_stop',
                       lambda m: state.__setitem__('emergency', state['emergency'] or m.data), 10)
+n.create_subscription(Bool, '/end_effector/mission_stop',
+                      lambda m: state.__setitem__('stop', state['stop'] or m.data), 10)
+
+def iptal():
+    """Gorev kesme kontrolu: EMERGENCY veya STOP.
+    Yakalandigi AN gercek role kapatilir (zimpara asla donmeye devam etmez)."""
+    if state['emergency'] or state['stop']:
+        gercek_zimpara(False)
+        return True
+    return False
 def on_det(m):
     try:
         d = json.loads(m.data)
@@ -75,7 +86,12 @@ n.create_subscription(String, '/end_effector/detections', on_det, 10)
 def on_status(m):
     """mini PC logic'in yayinladigi kalibre kuvvet (Newton)"""
     try:
-        state['force'] = float(json.loads(m.data).get('contact_force', 0.0))
+        d = json.loads(m.data)
+        state['force'] = float(d.get('contact_force', 0.0))
+        # GUI E-STOP GUVENCESI: emergency_stop topic'i kopruden gecmese bile
+        # logic'in status alanindan yakalanir (bu kanal kanitli calisiyor)
+        if d.get('emergency'):
+            state['emergency'] = True
     except Exception:
         pass
 n.create_subscription(String, '/end_effector/mission_status', on_status, 10)
@@ -93,12 +109,13 @@ def send(q, spin=0.0):
     z = Float64MultiArray(); z.data = [float(spin)]
     pub_z.publish(z)
 
-def move_seg(q0, q1, dur, spin=0.0):
-    """iki poz arasi kosinuslu, sim-saatli, surekli yayinla"""
+def move_seg(q0, q1, dur, spin=0.0, zorla=False):
+    """iki poz arasi kosinuslu, sim-saatli, surekli yayinla.
+    zorla=True: iptal bayragina BAKMA (guvenli kalkis icin)."""
     t0 = now(); import numpy as np
     q0 = np.array(q0); q1 = np.array(q1)
     while True:
-        if state['emergency']: return False
+        if not zorla and iptal(): return False
         t = now() - t0
         a = min(1.0, t / max(dur, 1e-3))
         a = 0.5 - 0.5 * math.cos(math.pi * a)
@@ -129,10 +146,11 @@ def glide(table, y0, y1, speed, spin=0.0, wall=False):
     clk = time.time if wall else now
     t0 = clk()
     while True:
-        if state['emergency']: return False
+        if iptal(): return False
         t = clk() - t0
         a = min(1.0, t / max(dur, 1e-3))
         y = y0 + (y1 - y0) * a
+        state['y_son'] = y            # iptalde guvenli kalkis icin konum izi
         send(table_at(table, y), spin)
         if a >= 1.0: return True
         rclpy.spin_once(n, timeout_sec=0.01); time.sleep(0.01)
@@ -181,8 +199,8 @@ def bekle_25N(label, pose):
     orn.sort(); dara = orn[len(orn)//2] if orn else 0.0
     log_gui(f'{label}: dara={dara:.1f} alindi -> SIMDI BASTIR (hedef: dara ustune +25..+50N)')
     t0 = time.time(); last_p = -1; ardarda = 0; son_uyari = 0.0
-    while time.time() - t0 < 90.0:
-        if state['emergency']: return False
+    while time.time() - t0 < 60.0:
+        if iptal(): return False
         send(pose)                      # pozu tut
         rclpy.spin_once(n, timeout_sec=0.05)
         d = state['force'] - dara       # dara ustu NET kuvvet
@@ -201,8 +219,9 @@ def bekle_25N(label, pose):
         el = int(time.time() - t0)
         if el // 5 != last_p:
             last_p = el // 5
-            log_gui(f'   bekleniyor... net +{state["force"]-dara:.1f}N ({el}sn/90sn)')
-    log_gui(f'{label}: 25N gelmedi (90sn) — yine de devam ediliyor')
+            log_gui(f'   bekleniyor... net +{state["force"]-dara:.1f}N ({el}sn/60sn)')
+    log_gui(f'{label}: TEMAS OKUNMADI (60sn) — DEMO MODU: yine de zimparalaniyor. '
+            f'Load cell duzelince 25N kapisi otomatik devreye girer.')
     return True
 
 def cluster(dets):
@@ -238,12 +257,14 @@ while rclpy.ok():
     if state['emergency']:
         log_gui('EMERGENCY -> role kapatildi, kol parka donuyor')
         gercek_zimpara(False); kamera_kutusu(False)
-        state['emergency'] = False; state['start'] = False
+        state['emergency'] = False; state['stop'] = False; state['start'] = False
         to_park(); continue
     if not state['start']:
+        state['stop'] = False        # bosta gelen STOP'un anlami yok — yut
         continue
     state['start'] = False
     state['dets'] = []
+    state['emergency'] = False; state['stop'] = False   # bayat bayrak temizligi
     log_gui('START alindi -> kol tarama pozuna gidiyor (esik +25cm)...')
     if not play_path(T['park_to_scan'], per_seg=0.12):
         to_park(); continue
@@ -253,21 +274,22 @@ while rclpy.ok():
     kamera_kutusu(True)
     t0 = time.time()
     while time.time() - t0 < 6.0:      # kutunun fiziksel acilmasi
-        if state['emergency']: break
+        if iptal(): break
         send(T['scan']); rclpy.spin_once(n, timeout_sec=0.05)
 
     log_gui(f'Kamera penceresi: {CAM_WINDOW_S:.0f} sn gercek tespit toplaniyor...')
     state['dets'] = []                  # pencere oncesi kareleri sayma
     t0 = time.time()
     while time.time() - t0 < CAM_WINDOW_S:
-        if state['emergency']: break
+        if iptal(): break
         send(T['scan'])
         rclpy.spin_once(n, timeout_sec=0.05)
 
     log_gui('Kamera kutusu kapaniyor...')
     kamera_kutusu(False)
-    if state['emergency']:
-        state['emergency'] = False; to_park(); continue
+    if iptal():
+        state['emergency'] = False; state['stop'] = False
+        to_park(); log_gui('Iptal edildi -> parkta.'); continue
 
     bolgeler = cluster(state['dets'])
     print(f'{sum(len(f) for f in state["dets"])} tespit -> {len(bolgeler)} bolge: '
@@ -277,12 +299,15 @@ while rclpy.ok():
         print('Tespit YOK -> geri cekiliyor, park.', flush=True)
         to_park(); continue
 
+    state['dets'] = []               # pencere sonrasi kareler birikmesin
     ok = True
     cur_y = None
+    state['lvl'] = 'HIGH'; state['y_son'] = SCAN_Y
     for bi, (ya, yb) in enumerate(bolgeler, 1):
         y_end = max(yb, ya + 0.01)   # min 1cm ilerleme (tek capak = 5sn)
         etiket = f'BOLGE {bi}/{len(bolgeler)}'
         entry = table_at(HIGH, ya)
+        state['y_son'] = ya
         if cur_y is None:
             ok = move_seg(T['scan'], entry, 2.0)
         else:
@@ -291,6 +316,7 @@ while rclpy.ok():
         log_gui(f'{etiket} [{ya:+.2f}..{y_end:+.2f}] -> INIS')
         low_pose = table_at(LOW, ya)
         ok = move_seg(entry, low_pose, 2.0)                    # inis
+        if ok: state['lvl'] = 'LOW'
         if not ok: break
         # 25N GERCEK TEMAS KAPISI — load cell'e bastirilmadan zimpara baslamaz
         ok = bekle_25N(etiket, low_pose)
@@ -303,9 +329,26 @@ while rclpy.ok():
         if not ok: break
         log_gui(f'{etiket} tamam -> kalkis')
         ok = move_seg(table_at(LOW, y_end), table_at(HIGH, y_end), 1.5)  # kalk
+        if ok: state['lvl'] = 'HIGH'
         if not ok: break
         cur_y = y_end
     gercek_zimpara(False)   # her ihtimale karsi role kapali
-    log_gui('Tum bolgeler bitti -> PARK\'a donuluyor')
-    to_park(from_y=cur_y)
-    log_gui('GOREV TAMAM ✓ — tekrar START bekleniyor')
+    if state['emergency'] or state['stop']:
+        # GUVENLI IPTAL: (1) role/kutu kapali, (2) kol LOW'daysa once DIKEY
+        # kalkis (zorla=True: iptal bayragi kalkisi engelleyemez), (3) bayraklar
+        # TEMIZLENIR ki park koridoru kesintisiz oynasin — yoksa kol koridoru
+        # atlayip dogrudan park referansina sicrar (tehlikeli).
+        sebep = 'EMERGENCY' if state['emergency'] else 'STOP'
+        log_gui(f'{sebep}! role kapatildi — guvenli kalkis + parka donus')
+        kamera_kutusu(False)
+        ys = state['y_son'] if state['y_son'] is not None else SCAN_Y
+        if state['lvl'] == 'LOW':
+            move_seg(table_at(LOW, ys), table_at(HIGH, ys), 1.5, zorla=True)
+            state['lvl'] = 'HIGH'
+        state['emergency'] = False; state['stop'] = False
+        to_park(from_y=ys)
+        log_gui('Iptal tamamlandi — kol parkta. Tekrar START bekleniyor')
+    else:
+        log_gui('Tum bolgeler bitti -> PARK\'a donuluyor')
+        to_park(from_y=cur_y)
+        log_gui('GOREV TAMAM ✓ — tekrar START bekleniyor')
