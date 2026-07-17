@@ -40,7 +40,7 @@ echo "[1/3] Gazebo başlatılıyor (pencere ~30 sn)..."
 setsid nohup ros2 launch end_effector_ros2 gazebo.launch.py > /tmp/gz_launch.log 2>&1 < /dev/null &
 for i in $(seq 1 90); do
     N=$(grep -c 'activate successful' /tmp/gz_launch.log 2>/dev/null)
-    [ "${N:-0}" -ge 3 ] && { echo "      Controller'lar hazır (${i} sn)."; break; }
+    [ "${N:-0}" -ge 2 ] && { echo "      Controller'lar hazır (${i} sn)."; break; }
     sleep 1
 done
 
