@@ -37,6 +37,22 @@ rclpy.init()
 n = rclpy.create_node('akilli_dinleyici')
 pub_j = n.create_publisher(Float64MultiArray, '/gz/dsr_position_controller/commands', 10)
 pub_z = n.create_publisher(Float64MultiArray, '/gz/zimpara_velocity_controller/commands', 10)
+# FIZIKSEL taraf (zenoh uzerinden mini PC can_node'a gider):
+pub_servo  = n.create_publisher(String, '/end_effector/servo_command', 10)   # kamera kutusu
+pub_sander = n.create_publisher(String, '/end_effector/sander_only', 10)     # gercek role
+pub_log    = n.create_publisher(String, '/end_effector/log', 10)             # mini PC GUI log paneli
+
+def log_gui(msg):
+    print(msg, flush=True)
+    pub_log.publish(String(data=f'[KOL] {msg}'))
+
+def kamera_kutusu(acik):
+    """gercek kamera kutusunu ac/kapat (servo)"""
+    s = 35 if acik else 160
+    pub_servo.publish(String(data=json.dumps({'s1': s, 's2': s, 'sander': 222})))
+
+def gercek_zimpara(acik):
+    pub_sander.publish(String(data=json.dumps({'sander': 111 if acik else 222})))
 
 FORCE_N      = 25.0          # zimpara baslama sarti (gercek load cell, Newton)
 FORCE_WAIT_S = 120.0         # 25N bekleme ust siniri (sim-sn); dolarsa uyariyla devam
@@ -106,13 +122,15 @@ def table_at(table, y):
             return list((1-a) * np.array(table[i]['j']) + a * np.array(table[i+1]['j']))
     return list(table[0]['j'] if y < table[0]['y'] else table[-1]['j'])
 
-def glide(table, y0, y1, speed, spin=0.0):
-    """hat boyunca y0->y1, verilen hizla (m/s)"""
+def glide(table, y0, y1, speed, spin=0.0, wall=False):
+    """hat boyunca y0->y1, verilen hizla (m/s). wall=True -> duvar saatiyle
+    (kullaniciya gercek saniye; cok yavas hizlarda takip guvenli)"""
     dist = abs(y1 - y0); dur = dist / max(speed, 1e-6)
-    t0 = now()
+    clk = time.time if wall else now
+    t0 = clk()
     while True:
         if state['emergency']: return False
-        t = now() - t0
+        t = clk() - t0
         a = min(1.0, t / max(dur, 1e-3))
         y = y0 + (y1 - y0) * a
         send(table_at(table, y), spin)
@@ -146,22 +164,27 @@ def to_park(from_y=None):
                 return
     print('  park zaman asimi (yaklasik parkta)', flush=True)
 
-def bekle_25N(label):
-    """gercek load cell 25N olana kadar bekle (kullanici bastiracak)"""
-    print(f'  {label}: 25N TEMAS BEKLENIYOR — load cell\'e bastir! (su an {state["force"]:.1f}N)', flush=True)
-    t0 = now(); last_p = 0
-    while now() - t0 < FORCE_WAIT_S:
+def bekle_25N(label, pose):
+    """gercek load cell 25N olana kadar bekle (DUVAR saati, sicrama filtresi).
+    Beklerken pozu tutmaya devam eder."""
+    log_gui(f'{label}: 25N TEMAS BEKLENIYOR — load cell\'e bastir! (F={state["force"]:.1f}N)')
+    t0 = time.time(); last_p = -1; ardarda = 0
+    while time.time() - t0 < 90.0:
         if state['emergency']: return False
-        send_hold = True
+        send(pose)                      # pozu tut
         rclpy.spin_once(n, timeout_sec=0.05)
         if state['force'] >= FORCE_N:
-            print(f'  {label}: TEMAS ✓ {state["force"]:.1f}N — zimpara basliyor!', flush=True)
-            return True
-        el = int(now() - t0)
+            ardarda += 1
+            if ardarda >= 3:            # 3 ardisik okuma: gercek temas
+                log_gui(f'{label}: TEMAS ✓ {state["force"]:.1f}N — zimpara basliyor!')
+                return True
+        else:
+            ardarda = 0
+        el = int(time.time() - t0)
         if el // 5 != last_p:
             last_p = el // 5
-            print(f'    bekleniyor... F={state["force"]:.1f}N ({el}sn)', flush=True)
-    print(f'  {label}: 25N gelmedi ({FORCE_WAIT_S:.0f}sn) — yine de devam', flush=True)
+            log_gui(f'   bekleniyor... F={state["force"]:.1f}N ({el}sn/90sn)')
+    log_gui(f'{label}: 25N gelmedi (90sn) — yine de devam ediliyor')
     return True
 
 def cluster(dets):
@@ -195,23 +218,36 @@ print('╚═══════════════════════�
 while rclpy.ok():
     rclpy.spin_once(n, timeout_sec=0.1)
     if state['emergency']:
-        print('EMERGENCY -> park', flush=True)
+        log_gui('EMERGENCY -> role kapatildi, kol parka donuyor')
+        gercek_zimpara(False); kamera_kutusu(False)
         state['emergency'] = False; state['start'] = False
         to_park(); continue
     if not state['start']:
         continue
     state['start'] = False
     state['dets'] = []
-    print('START -> tarama pozuna gidiliyor (esik +25cm)...', flush=True)
+    log_gui('START alindi -> kol tarama pozuna gidiyor (esik +25cm)...')
     if not play_path(T['park_to_scan'], per_seg=0.12):
         to_park(); continue
 
-    print(f'Kamera penceresi: {CAM_WINDOW_S:.0f} sn tespit toplaniyor...', flush=True)
-    t0 = now()
-    while now() - t0 < CAM_WINDOW_S:
+    # KOL VARDI -> simdi GERCEK kamera kutusunu ac (tek beyin senkronu)
+    log_gui('Kol tarama pozunda ✓ — kamera kutusu ACILIYOR...')
+    kamera_kutusu(True)
+    t0 = time.time()
+    while time.time() - t0 < 6.0:      # kutunun fiziksel acilmasi
+        if state['emergency']: break
+        send(T['scan']); rclpy.spin_once(n, timeout_sec=0.05)
+
+    log_gui(f'Kamera penceresi: {CAM_WINDOW_S:.0f} sn gercek tespit toplaniyor...')
+    state['dets'] = []                  # pencere oncesi kareleri sayma
+    t0 = time.time()
+    while time.time() - t0 < CAM_WINDOW_S:
         if state['emergency']: break
         send(T['scan'])
         rclpy.spin_once(n, timeout_sec=0.05)
+
+    log_gui('Kamera kutusu kapaniyor...')
+    kamera_kutusu(False)
     if state['emergency']:
         state['emergency'] = False; to_park(); continue
 
@@ -234,19 +270,24 @@ while rclpy.ok():
         else:
             ok = glide(HIGH, cur_y, ya, 0.10)
         if not ok: break
-        print(f'  {etiket} [{ya:+.2f}..{y_end:+.2f}] -> inis', flush=True)
-        ok = move_seg(entry, table_at(LOW, ya), 2.0)          # inis
+        log_gui(f'{etiket} [{ya:+.2f}..{y_end:+.2f}] -> INIS')
+        low_pose = table_at(LOW, ya)
+        ok = move_seg(entry, low_pose, 2.0)                    # inis
         if not ok: break
         # 25N GERCEK TEMAS KAPISI — load cell'e bastirilmadan zimpara baslamaz
-        ok = bekle_25N(etiket)
+        ok = bekle_25N(etiket, low_pose)
         if not ok: break
-        print(f'  {etiket} ZIMPARA: {abs(y_end-ya)*100:.0f} cm @ 1cm/5sn', flush=True)
-        ok = glide(LOW, ya, y_end, CREEP_MPS, spin=SPIN)       # surunme zimpara
+        log_gui(f'{etiket} ZIMPARA: {abs(y_end-ya)*100:.0f} cm @ 1cm/5sn (gercek role ACIK)')
+        gercek_zimpara(True)                                   # GERCEK role calisir!
+        ok = glide(LOW, ya, y_end, CREEP_MPS, spin=SPIN, wall=True)  # duvar-saatiyle surun
+        gercek_zimpara(False)
         send(table_at(LOW, y_end), 0.0)
         if not ok: break
+        log_gui(f'{etiket} tamam -> kalkis')
         ok = move_seg(table_at(LOW, y_end), table_at(HIGH, y_end), 1.5)  # kalk
         if not ok: break
         cur_y = y_end
-    print('Bolgeler bitti -> park.', flush=True)
+    gercek_zimpara(False)   # her ihtimale karsi role kapali
+    log_gui('Tum bolgeler bitti -> PARK\'a donuluyor')
     to_park(from_y=cur_y)
-    print('HAZIR — tekrar START bekleniyor.', flush=True)
+    log_gui('GOREV TAMAM ✓ — tekrar START bekleniyor')
