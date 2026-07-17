@@ -92,7 +92,8 @@ def on_status(m):
         # alanini SUREKLI true yayinlar; seviye olarak okursak kol sonsuz park
         # dongusune girer. Sadece false->true GECISI latch'lenir.
         e = bool(d.get('emergency'))
-        if e and not state.get('em_onceki', False):
+        onceki = state.get('em_onceki')      # ILK mesaj taban sayilir (None)
+        if onceki is not None and e and not onceki:
             state['emergency'] = True
         state['em_onceki'] = e
     except Exception:
