@@ -173,10 +173,14 @@ def bekle_25N(label, pose):
         if state['emergency']: return False
         send(pose)                      # pozu tut
         rclpy.spin_once(n, timeout_sec=0.05)
-        if state['force'] >= FORCE_N:
+        f = state['force']
+        if f > 50.0:                    # 50N ustu mini PC'nin ACIL DURUM esigi — sayma, uyar
+            ardarda = 0
+            log_gui(f'{label}: COK SERT ({f:.1f}N)! 25-50N arasi bastir — 50N ustu ACIL DURUM tetikler')
+        elif f >= FORCE_N:              # gecerli temas bandi: 25-50N
             ardarda += 1
             if ardarda >= 3:            # 3 ardisik okuma: gercek temas
-                log_gui(f'{label}: TEMAS ✓ {state["force"]:.1f}N — zimpara basliyor!')
+                log_gui(f'{label}: TEMAS ✓ {f:.1f}N — zimpara basliyor!')
                 return True
         else:
             ardarda = 0
