@@ -49,10 +49,21 @@ if [ "$1" = "sade" ]; then
     wait; exit 0
 fi
 
-# ── 2) Zenoh (mini PC bağlantısı) ──
-pkill -9 -f zenoh-bridge-ros2dds 2>/dev/null; sleep 1
-RUST_LOG=warn setsid nohup "$WS/zenoh-bridge-ros2dds" -d 42 -e tcp/127.0.0.1:7447 \
-    > /tmp/zenoh_demo.log 2>&1 < /dev/null &
+# ── 2) Zenoh (mini PC bağlantısı) — BEKÇİLİ: düşerse 3sn'de yeniden bağlanır ──
+pkill -9 -f zenoh-bridge-ros2dds 2>/dev/null
+pkill -9 -f zenoh_guard 2>/dev/null
+sleep 1
+cat > /tmp/zenoh_guard.sh << 'GEOF'
+#!/bin/bash
+cd "$HOME/ros2-end-effector"
+while true; do
+  RUST_LOG=warn ./zenoh-bridge-ros2dds -d 42 -e tcp/127.0.0.1:7447 >> /tmp/zenoh_demo.log 2>&1
+  echo "[GUARD] zenoh dustu, yeniden..." >> /tmp/zenoh_demo.log
+  sleep 3
+done
+GEOF
+chmod +x /tmp/zenoh_guard.sh
+setsid nohup bash /tmp/zenoh_guard.sh > /dev/null 2>&1 < /dev/null &
 sleep 3
 if pgrep -f zenoh-bridge-ros2dds > /dev/null; then
     echo "[2/3] Zenoh köprüsü açık (mini PC bağlantısı) ✓"
@@ -60,6 +71,10 @@ else
     echo "[2/3] UYARI: zenoh başlamadı — mini PC'ye ulaşılamayabilir."
 fi
 
-# ── 3) Akıllı dinleyici (ön planda) ──
+# ── 3) Akıllı dinleyici (ön planda, BEKÇİLİ: düşerse yeniden başlar) ──
 echo "[3/3] Akıllı dinleyici başlıyor..."
-exec python3 -u "$WS/akilli_dinleyici.py"
+while true; do
+    python3 -u "$WS/akilli_dinleyici.py"
+    echo "[GUARD] dinleyici kapandı — 3 sn sonra yeniden başlıyor (çıkmak: Ctrl+C)"
+    sleep 3
+done
