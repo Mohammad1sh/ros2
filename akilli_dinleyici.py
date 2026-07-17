@@ -88,10 +88,13 @@ def on_status(m):
     try:
         d = json.loads(m.data)
         state['force'] = float(d.get('contact_force', 0.0))
-        # GUI E-STOP GUVENCESI: emergency_stop topic'i kopruden gecmese bile
-        # logic'in status alanindan yakalanir (bu kanal kanitli calisiyor)
-        if d.get('emergency'):
+        # GUI E-STOP GUVENCESI — KENAR tetik: logic e-stop sonrasi 'emergency'
+        # alanini SUREKLI true yayinlar; seviye olarak okursak kol sonsuz park
+        # dongusune girer. Sadece false->true GECISI latch'lenir.
+        e = bool(d.get('emergency'))
+        if e and not state.get('em_onceki', False):
             state['emergency'] = True
+        state['em_onceki'] = e
     except Exception:
         pass
 n.create_subscription(String, '/end_effector/mission_status', on_status, 10)
@@ -161,23 +164,33 @@ n.create_subscription(JointState, '/gz/joint_states',
                       lambda m: jstate.update(zip(m.name, m.position)), 10)
 JNAMES = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
 
-def to_park(from_y=None):
+def parkta():
+    """kol su an park pozunda mi? (eklem geri beslemesinden)"""
+    if not all(k in jstate for k in JNAMES):
+        return False
+    return max(abs(jstate[k] - T['park'][i]) for i, k in enumerate(JNAMES)) < 0.05
+
+def to_park(from_y=None, acele=False):
     """GERI-BESLEMELI park donusu: yuksek hatta scan hizasina -> scan ->
-    ayna yol -> park (eklemler VARANA kadar yayin)."""
+    ayna yol -> park (eklemler VARANA kadar yayin).
+    acele=True: EMERGENCY/STOP icin hizli geri cekilme."""
+    hiz  = 0.25 if acele else 0.10
+    segs = 1.2  if acele else 2.5
+    segp = 0.10 if acele else 0.18
     if from_y is not None:
-        glide(HIGH, from_y, SCAN_Y, 0.10)
+        glide(HIGH, from_y, SCAN_Y, hiz)
     entry = table_at(HIGH, SCAN_Y)
-    move_seg(entry, T['scan'], 2.5)
+    move_seg(entry, T['scan'], segs)
     path = list(reversed(T['park_to_scan']))
-    play_path(path, per_seg=0.18)
+    play_path(path, per_seg=segp)
     # parki eklem geri beslemesiyle kilitle
     t0 = time.time()
-    while time.time() - t0 < 60:
+    while time.time() - t0 < 90:
         send(T['park'])
         rclpy.spin_once(n, timeout_sec=0.01); time.sleep(0.04)
         if all(k in jstate for k in JNAMES):
             err = max(abs(jstate[k] - T['park'][i]) for i, k in enumerate(JNAMES))
-            if err < 0.02:
+            if err < 0.03:
                 print(f'  park dogrulandi (hata {err:.3f} rad)', flush=True)
                 return
     print('  park zaman asimi (yaklasik parkta)', flush=True)
@@ -255,10 +268,14 @@ print('╚═══════════════════════�
 while rclpy.ok():
     rclpy.spin_once(n, timeout_sec=0.1)
     if state['emergency']:
-        log_gui('EMERGENCY -> role kapatildi, kol parka donuyor')
         gercek_zimpara(False); kamera_kutusu(False)
         state['emergency'] = False; state['stop'] = False; state['start'] = False
-        to_park(); continue
+        if parkta():
+            log_gui('EMERGENCY (bosta) — kol zaten parkta, hareket yok')
+        else:
+            log_gui('EMERGENCY -> role kapatildi, kol HIZLI parka donuyor')
+            to_park(acele=True)
+        continue
     if not state['start']:
         state['stop'] = False        # bosta gelen STOP'un anlami yok — yut
         continue
@@ -339,14 +356,14 @@ while rclpy.ok():
         # TEMIZLENIR ki park koridoru kesintisiz oynasin — yoksa kol koridoru
         # atlayip dogrudan park referansina sicrar (tehlikeli).
         sebep = 'EMERGENCY' if state['emergency'] else 'STOP'
-        log_gui(f'{sebep}! role kapatildi — guvenli kalkis + parka donus')
+        log_gui(f'{sebep}! role kapatildi — HIZLI kalkis + parka donus')
         kamera_kutusu(False)
         ys = state['y_son'] if state['y_son'] is not None else SCAN_Y
         if state['lvl'] == 'LOW':
-            move_seg(table_at(LOW, ys), table_at(HIGH, ys), 1.5, zorla=True)
+            move_seg(table_at(LOW, ys), table_at(HIGH, ys), 0.8, zorla=True)
             state['lvl'] = 'HIGH'
         state['emergency'] = False; state['stop'] = False
-        to_park(from_y=ys)
+        to_park(from_y=ys, acele=True)
         log_gui('Iptal tamamlandi — kol parkta. Tekrar START bekleniyor')
     else:
         log_gui('Tum bolgeler bitti -> PARK\'a donuluyor')
