@@ -4,7 +4,14 @@
     <static>true</static>
     <link name="chassis">
       <pose>0 0 0 0 0 0</pose>
-      <!-- collision kaldirildi: trimesh-trimesh ODE bogulmasi -->
+      <collision name="col">
+        <geometry>
+          <mesh>
+            <uri>model://arac_sase/meshes/arac_sase.stl</uri>
+            <scale>0.008 0.008 0.008</scale>
+          </mesh>
+        </geometry>
+      </collision>
       <visual name="vis">
         <geometry>
           <mesh>
