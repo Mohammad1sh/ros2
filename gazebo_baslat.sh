@@ -28,6 +28,7 @@ source "$WS/install/setup.bash"
 pkill -f "ros2 launch end_effector_ros2" 2>/dev/null
 pkill -f "ign gazebo" 2>/dev/null
 pkill -f akilli_dinleyici 2>/dev/null
+pkill -9 -f gui_guard 2>/dev/null
 pkill -f koreografi_oynat 2>/dev/null
 sleep 1
 pkill -9 -f "ign gazebo" 2>/dev/null
@@ -44,6 +45,24 @@ for i in $(seq 1 90); do
 done
 
 # sade mod: sadece Gazebo istenirse burada dur
+
+# ── [1.5] GUI BEKCISI: GUI cokse/kapansa da sunucu YASAR; 3 sn'de yeni pencere ──
+pkill -9 -f 'gui_guard' 2>/dev/null
+pkill -9 -f 'ign gazebo -g' 2>/dev/null
+cat > /tmp/gui_guard.sh << 'GGEOF'
+#!/bin/bash
+export DISPLAY="${DISPLAY:-:0}"
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+export QT_QPA_PLATFORM=xcb
+while true; do
+  ign gazebo -g --render-engine-gui ogre >> /tmp/gui.log 2>&1
+  sleep 3
+done
+GGEOF
+chmod +x /tmp/gui_guard.sh
+setsid nohup /tmp/gui_guard.sh > /dev/null 2>&1 < /dev/null &
+echo "[1.5/3] GUI bekcisi acik (siyah ekran gorursen pencereyi KAPAT, 3 sn'de yenisi gelir)"
+
 if [ "$1" = "sade" ]; then
     echo "[SADE] Sadece Gazebo çalışıyor. Çıkmak için Ctrl+C."
     wait; exit 0
