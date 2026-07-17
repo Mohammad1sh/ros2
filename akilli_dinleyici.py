@@ -38,7 +38,11 @@ n = rclpy.create_node('akilli_dinleyici')
 pub_j = n.create_publisher(Float64MultiArray, '/gz/dsr_position_controller/commands', 10)
 pub_z = n.create_publisher(Float64MultiArray, '/gz/zimpara_velocity_controller/commands', 10)
 
-state = {'emergency': False, 'start': False, 'dets': []}
+FORCE_N      = 25.0          # zimpara baslama sarti (gercek load cell, Newton)
+FORCE_WAIT_S = 120.0         # 25N bekleme ust siniri (sim-sn); dolarsa uyariyla devam
+DISK_R       = 0.05          # disk yaricapi (kumeleme icin)
+
+state = {'emergency': False, 'start': False, 'dets': [], 'force': 0.0}
 n.create_subscription(Bool, '/end_effector/mission_start',
                       lambda m: state.__setitem__('start', state['start'] or m.data), 10)
 n.create_subscription(Bool, '/end_effector/emergency_stop',
@@ -51,6 +55,14 @@ def on_det(m):
     except Exception:
         pass
 n.create_subscription(String, '/end_effector/detections', on_det, 10)
+
+def on_status(m):
+    """mini PC logic'in yayinladigi kalibre kuvvet (Newton)"""
+    try:
+        state['force'] = float(json.loads(m.data).get('contact_force', 0.0))
+    except Exception:
+        pass
+n.create_subscription(String, '/end_effector/mission_status', on_status, 10)
 
 from rosgraph_msgs.msg import Clock
 sim = {'t': None}
@@ -107,31 +119,74 @@ def glide(table, y0, y1, speed, spin=0.0):
         if a >= 1.0: return True
         rclpy.spin_once(n, timeout_sec=0.01); time.sleep(0.01)
 
-def to_park():
-    # guvenli donus: yuksek hatta scan tarafina -> scan -> park (ayna)
-    send(T['scan']); time.sleep(0.3)
+from sensor_msgs.msg import JointState
+jstate = {}
+n.create_subscription(JointState, '/gz/joint_states',
+                      lambda m: jstate.update(zip(m.name, m.position)), 10)
+JNAMES = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
+
+def to_park(from_y=None):
+    """GERI-BESLEMELI park donusu: yuksek hatta scan hizasina -> scan ->
+    ayna yol -> park (eklemler VARANA kadar yayin)."""
+    if from_y is not None:
+        glide(HIGH, from_y, SCAN_Y, 0.10)
+    entry = table_at(HIGH, SCAN_Y)
+    move_seg(entry, T['scan'], 2.5)
     path = list(reversed(T['park_to_scan']))
-    play_path(path, per_seg=0.10)
-    # parki kilitle
-    for _ in range(40):
-        send(T['park']); rclpy.spin_once(n, timeout_sec=0.0); time.sleep(0.05)
+    play_path(path, per_seg=0.18)
+    # parki eklem geri beslemesiyle kilitle
+    t0 = time.time()
+    while time.time() - t0 < 60:
+        send(T['park'])
+        rclpy.spin_once(n, timeout_sec=0.01); time.sleep(0.04)
+        if all(k in jstate for k in JNAMES):
+            err = max(abs(jstate[k] - T['park'][i]) for i, k in enumerate(JNAMES))
+            if err < 0.02:
+                print(f'  park dogrulandi (hata {err:.3f} rad)', flush=True)
+                return
+    print('  park zaman asimi (yaklasik parkta)', flush=True)
+
+def bekle_25N(label):
+    """gercek load cell 25N olana kadar bekle (kullanici bastiracak)"""
+    print(f'  {label}: 25N TEMAS BEKLENIYOR — load cell\'e bastir! (su an {state["force"]:.1f}N)', flush=True)
+    t0 = now(); last_p = 0
+    while now() - t0 < FORCE_WAIT_S:
+        if state['emergency']: return False
+        send_hold = True
+        rclpy.spin_once(n, timeout_sec=0.05)
+        if state['force'] >= FORCE_N:
+            print(f'  {label}: TEMAS ✓ {state["force"]:.1f}N — zimpara basliyor!', flush=True)
+            return True
+        el = int(now() - t0)
+        if el // 5 != last_p:
+            last_p = el // 5
+            print(f'    bekleniyor... F={state["force"]:.1f}N ({el}sn)', flush=True)
+    print(f'  {label}: 25N gelmedi ({FORCE_WAIT_S:.0f}sn) — yine de devam', flush=True)
+    return True
 
 def cluster(dets):
-    """tespit karelerinden esik-y bolgeleri cikar"""
-    ys = []
+    """tespitler -> disk-farkindalikli bolgeler:
+    her tespit ±DISK_R araligina genisletilir, kesisenler birlesir.
+    Boylece 10cm disk icine giren yakin capaklar TEK bolge olur."""
+    iv = []
     for frame in dets:
         for b in frame:
             dy = (b['x'] - FRAME_W / 2) * PX2M * AXIS_SIGN
-            ys.append(max(Y_MIN, min(Y_MAX, SCAN_Y + dy)))
-    if not ys: return []
-    ys.sort()
-    groups = [[ys[0]]]
-    for y in ys[1:]:
-        if y - groups[-1][-1] > GAP_M:
-            groups.append([y])
+            y = max(Y_MIN, min(Y_MAX, SCAN_Y + dy))
+            iv.append((y - DISK_R, y + DISK_R))
+    if not iv: return []
+    iv.sort()
+    merged = [list(iv[0])]
+    for a, b in iv[1:]:
+        if a <= merged[-1][1] + 1e-9:      # kesisiyor/degiyor -> birlestir
+            merged[-1][1] = max(merged[-1][1], b)
         else:
-            groups[-1].append(y)
-    return [(g[0], g[-1]) for g in groups]
+            merged.append([a, b])
+    # kullanici kurali: disk MERKEZI ilk capaga iner (a+R), son capaga kadar (b-R)
+    out = []
+    for a, b in merged:
+        out.append((max(Y_MIN, a + DISK_R), min(Y_MAX, b - DISK_R)))
+    return [(min(a, b), max(a, b)) for a, b in out]
 
 print('╔════════════════════════════════════════════════╗')
 print('║ AKILLI DINLEYICI HAZIR — mini PC\'de START\'a bas ║')
@@ -170,19 +225,22 @@ while rclpy.ok():
 
     ok = True
     cur_y = None
-    for (ya, yb) in bolgeler:
-        y_end = yb + 0.01   # kullanici kurali: baslangictan itibaren 5sn/1cm; min 1cm
-        # yuksek hatta bolge basina git
+    for bi, (ya, yb) in enumerate(bolgeler, 1):
+        y_end = max(yb, ya + 0.01)   # min 1cm ilerleme (tek capak = 5sn)
+        etiket = f'BOLGE {bi}/{len(bolgeler)}'
         entry = table_at(HIGH, ya)
         if cur_y is None:
             ok = move_seg(T['scan'], entry, 2.0)
         else:
             ok = glide(HIGH, cur_y, ya, 0.10)
         if not ok: break
-        print(f'  bolge [{ya:+.2f}..{y_end:+.2f}] -> inis', flush=True)
+        print(f'  {etiket} [{ya:+.2f}..{y_end:+.2f}] -> inis', flush=True)
         ok = move_seg(entry, table_at(LOW, ya), 2.0)          # inis
         if not ok: break
-        print(f'  ZIMPARA: {abs(y_end-ya)*100:.0f} cm @ 1cm/5sn', flush=True)
+        # 25N GERCEK TEMAS KAPISI — load cell'e bastirilmadan zimpara baslamaz
+        ok = bekle_25N(etiket)
+        if not ok: break
+        print(f'  {etiket} ZIMPARA: {abs(y_end-ya)*100:.0f} cm @ 1cm/5sn', flush=True)
         ok = glide(LOW, ya, y_end, CREEP_MPS, spin=SPIN)       # surunme zimpara
         send(table_at(LOW, y_end), 0.0)
         if not ok: break
@@ -190,5 +248,5 @@ while rclpy.ok():
         if not ok: break
         cur_y = y_end
     print('Bolgeler bitti -> park.', flush=True)
-    to_park()
+    to_park(from_y=cur_y)
     print('HAZIR — tekrar START bekleniyor.', flush=True)
