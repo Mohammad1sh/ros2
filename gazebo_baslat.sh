@@ -60,8 +60,8 @@ while true; do
 done
 GGEOF
 chmod +x /tmp/gui_guard.sh
-setsid nohup /tmp/gui_guard.sh > /dev/null 2>&1 < /dev/null &
-echo "[1.5/3] GUI bekcisi acik (siyah ekran gorursen pencereyi KAPAT, 3 sn'de yenisi gelir)"
+: # birlesik modda GUI bekcisi kapali (GUI launch icinde)
+echo "[1.5/3] Birlesik mod: GUI launch icinde acilacak"
 
 if [ "$1" = "sade" ]; then
     echo "[SADE] Sadece Gazebo çalışıyor. Çıkmak için Ctrl+C."

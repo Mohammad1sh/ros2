@@ -87,7 +87,7 @@ def generate_launch_description():
         # (GL3PlusTextureGpu::copyTo / GLX sorunları) → GUI ogre1 kullanır
         # zimpara_dunyasi.sdf: gölgesiz + 2ms fizik (performans)
         launch_arguments={'gz_args':
-            f"-s -r -v 3 {os.path.join(pkg_share, 'worlds', 'zimpara_dunyasi.sdf')}"
+            f"-r -v 3 --render-engine-gui ogre {os.path.join(pkg_share, 'worlds', 'zimpara_dunyasi.sdf')}"
         }.items(),
     )
 
