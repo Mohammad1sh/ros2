@@ -18,6 +18,9 @@ export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 export ROS_DOMAIN_ID=42
 unset ROS_LOCALHOST_ONLY
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export ROS_DISTRO=humble
+# Yerel DDS kesfi SADECE loopback: dis ag olaylari multicasti bozamaz
+export CYCLONEDDS_URI='<CycloneDDS><Domain><General><Interfaces><NetworkInterface name="lo" multicast="true"/></Interfaces></General></Domain></CycloneDDS>'
 export QT_QPA_PLATFORM=xcb
 
 WS="$HOME/ros2-end-effector"
