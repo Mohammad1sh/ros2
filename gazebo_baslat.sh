@@ -18,6 +18,8 @@ export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 export ROS_DOMAIN_ID=42
 unset ROS_LOCALHOST_ONLY
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+# WSL multicast arizalarina karsi: yalniz yerel unicast kesif (zenoh TCP etkilenmez)
+export CYCLONEDDS_URI='<CycloneDDS><Domain><General><AllowMulticast>false</AllowMulticast></General><Discovery><MaxAutoParticipantIndex>120</MaxAutoParticipantIndex><Peers><Peer address="127.0.0.1"/></Peers></Discovery></Domain></CycloneDDS>'
 export QT_QPA_PLATFORM=xcb
 
 WS="$HOME/ros2-end-effector"
