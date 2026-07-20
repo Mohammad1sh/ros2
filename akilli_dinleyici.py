@@ -47,9 +47,10 @@ def log_gui(msg):
     pub_log.publish(String(data=f'[KOL] {msg}'))
 
 def kamera_kutusu(acik):
-    """gercek kamera kutusunu ac/kapat (servo)"""
+    """kamera kutusu — GERCEK servo + SIM kapagi (7. eksen) birlikte hareket eder"""
     s = 35 if acik else 160
     pub_servo.publish(String(data=json.dumps({'s1': s, 's2': s, 'sander': 222})))
+    state['kutu_sim'] = 0.025 if acik else 0.0
 
 def gercek_zimpara(acik):
     pub_sander.publish(String(data=json.dumps({'sander': 111 if acik else 222})))
@@ -108,7 +109,8 @@ def now():
     return sim['t'] if sim['t'] is not None else time.time()
 
 def send(q, spin=0.0):
-    m = Float64MultiArray(); m.data = [float(v) for v in q] + [0.0]
+    # 7. eksen = kamera kutusu KAPAGI (prismatik 0-0.025m): sim'de de acilip kapanir
+    m = Float64MultiArray(); m.data = [float(v) for v in q] + [state.get('kutu_sim', 0.0)]
     pub_j.publish(m)
     z = Float64MultiArray(); z.data = [float(spin)]
     pub_z.publish(z)
@@ -178,12 +180,27 @@ def to_park(from_y=None, acele=False):
     hiz  = 0.25 if acele else 0.10
     segs = 1.2  if acele else 2.5
     segp = 0.10 if acele else 0.18
-    if from_y is not None:
-        glide(HIGH, from_y, SCAN_Y, hiz)
-    entry = table_at(HIGH, SCAN_Y)
-    move_seg(entry, T['scan'], segs)
+    if parkta():
+        return                          # zaten parkta — kimildama, sicrama yok
+    # AKILLI BASLANGIC: kol ZATEN tarama pozundaysa referansi HIGH girisine
+    # sicratma (0-tespit donusunde sasiye carpmanin koku buydu)
+    scan_yakin = all(k in jstate for k in JNAMES) and \
+        max(abs(jstate[k] - T['scan'][i]) for i, k in enumerate(JNAMES)) < 0.15
+    if not scan_yakin:
+        if from_y is not None:
+            glide(HIGH, from_y, SCAN_Y, hiz)
+        entry = table_at(HIGH, SCAN_Y)
+        move_seg(entry, T['scan'], segs)
     path = list(reversed(T['park_to_scan']))
-    play_path(path, per_seg=segp)
+    if not play_path(path, per_seg=segp):
+        # koridor sirasinda YENI acil durum: oldugun yerde SABITLEN (yanki yok)
+        if all(k in jstate for k in JNAMES):
+            dur = [jstate[k] for k in JNAMES]
+            t0 = time.time()
+            while time.time() - t0 < 3.0:
+                send(dur); rclpy.spin_once(n, timeout_sec=0.02); time.sleep(0.03)
+        log_gui('Park donusu kesildi — kol guvenli sekilde sabitlendi')
+        return
     # parki eklem geri beslemesiyle kilitle
     t0 = time.time()
     while time.time() - t0 < 90:
@@ -196,7 +213,7 @@ def to_park(from_y=None, acele=False):
                 return
     print('  park zaman asimi (yaklasik parkta)', flush=True)
 
-def bekle_25N(label, pose):
+def _kullanilmiyor_bekle_25N(label, pose):  # ESKI YONTEM — asamali_inis geldi, cagrilmiyor
     """gercek load cell 25N olana kadar bekle (DUVAR saati, sicrama filtresi).
     Beklerken pozu tutmaya devam eder."""
     # --- OTOMATIK DARA ---------------------------------------------------
@@ -230,9 +247,71 @@ def bekle_25N(label, pose):
         if el // 5 != last_p:
             last_p = el // 5
             log_gui(f'   bekleniyor... net +{state["force"]-dara:.1f}N ({el}sn/60sn)')
-    log_gui(f'{label}: TEMAS OKUNMADI (60sn) — DEMO MODU: yine de zimparalaniyor. '
-            f'Load cell duzelince 25N kapisi otomatik devreye girer.')
-    return True
+    return False
+
+SPAN = 0.155   # HIGH(z=0.300) ile LOW(z=0.145) arasi dusey mesafe (m)
+
+def karisim(y, a):
+    """HIGH ve LOW hatlari arasinda (a=0 HIGH, a=1 LOW) eklem-uzayi karisimi.
+    a>1 = LOW'un ALTINA dogru kucuk ekstrapolasyon (bosluk aramasi icin)."""
+    import numpy as np
+    qh = np.array(table_at(HIGH, y)); ql = np.array(table_at(LOW, y))
+    return list(qh + (ql - qh) * a)
+
+def asamali_inis(etiket, ya):
+    """KULLANICI KURALI — temas mantigi inise gomulu (operator basisi beklenmez):
+      1) Zimpara yuksekliginin 5cm USTUNE gel, dara al, kuvvet izlemeye basla
+      2) 5cm in: bu sirada net >= 25N olursa TEMAS (inis durur, zimpara baslar)
+      3) 5cm sonunda tepki varsa (net >= 10N) 25N'a kadar derinlesmeye devam
+      4) Tepki yoksa +5cm daha in (toplam 10cm)
+      5) Hala tepki yoksa -> BOSLUK: zimpara yapilmaz, geri cekilme
+    Donus: 'TEMAS' | 'BOS' | 'IPTAL'"""
+    a_ust = 1 - 0.05 / SPAN            # LOW'un 5cm ustu
+    a_alt = 1 + 0.05 / SPAN            # LOW'un 5cm alti
+    hedef = karisim(ya, a_ust)
+    if not move_seg(table_at(HIGH, ya), hedef, 1.5):
+        return 'IPTAL'
+    orn = []; t0 = time.time()
+    while time.time() - t0 < 0.8:      # dara: bosta okuma
+        send(hedef); rclpy.spin_once(n, timeout_sec=0.05)
+        orn.append(state['force'])
+    orn.sort(); dara = orn[len(orn)//2] if orn else 0.0
+    log_gui(f'{etiket}: 5cm ustte dara={dara:.1f} -> asamali inis (kuvvet izleniyor)')
+
+    def in_ve_izle(a0, a1, sure):
+        t0 = time.time()
+        while True:
+            if iptal(): return 'IPTAL'
+            t = (time.time() - t0) / sure
+            if t >= 1.0: return None
+            send(karisim(ya, a0 + (a1 - a0) * t))
+            rclpy.spin_once(n, timeout_sec=0.03); time.sleep(0.02)
+            d = state['force'] - dara
+            if d >= FORCE_N:
+                log_gui(f'{etiket}: TEMAS ✓ net +{d:.1f}N — inis durdu, zimpara basliyor')
+                return 'TEMAS'
+
+    r = in_ve_izle(a_ust, 1.0, 4.0)            # asama 1: ilk 5cm
+    if r: return r
+    d = state['force'] - dara
+    if d >= 10.0:
+        log_gui(f'{etiket}: tepki var (+{d:.1f}N) — 25N icin derinlesiliyor')
+        r = in_ve_izle(1.0, a_alt, 4.0)
+        if r: return r
+        d = state['force'] - dara
+        if d >= 10.0:
+            log_gui(f'{etiket}: 25N tam olusmadi ama temas belirgin (+{d:.1f}N) — zimpara basliyor')
+            return 'TEMAS'
+        return 'BOS'
+    log_gui(f'{etiket}: 5cm indi, load cell TEPKISIZ — +5cm daha araniyor')
+    r = in_ve_izle(1.0, a_alt, 4.0)            # asama 2: toplam 10cm
+    if r: return r
+    d = state['force'] - dara
+    if d >= 10.0:
+        log_gui(f'{etiket}: gec tepki (+{d:.1f}N) — temas kabul, zimpara basliyor')
+        return 'TEMAS'
+    log_gui(f'{etiket}: 10cm inildi, load cell degismedi — zimpara BOSLUKTA')
+    return 'BOS'
 
 def cluster(dets):
     """Kare-tespitleri -> CAPAK NOKTALARI -> bolgeler.
@@ -353,14 +432,17 @@ while rclpy.ok():
         else:
             ok = glide(HIGH, cur_y, ya, 0.10)
         if not ok: break
-        log_gui(f'{etiket} [{ya:+.2f}..{y_end:+.2f}] -> INIS')
-        low_pose = table_at(LOW, ya)
-        ok = move_seg(entry, low_pose, 2.0)                    # inis
-        if ok: state['lvl'] = 'LOW'
-        if not ok: break
-        # 25N GERCEK TEMAS KAPISI — load cell'e bastirilmadan zimpara baslamaz
-        ok = bekle_25N(etiket, low_pose)
-        if not ok: break
+        log_gui(f'{etiket} [{ya:+.2f}..{y_end:+.2f}] -> ASAMALI INIS')
+        son = asamali_inis(etiket, ya)
+        if son == 'IPTAL':
+            ok = False; break
+        if son == 'BOS':
+            log_gui(f'{etiket}: zimpara yapilmadan GERI CEKILIYOR (bosluk)')
+            move_seg(karisim(ya, 1 + 0.05 / SPAN), table_at(HIGH, ya), 1.8, zorla=True)
+            state['lvl'] = 'HIGH'
+            cur_y = ya
+            continue
+        state['lvl'] = 'LOW'
         log_gui(f'{etiket} ZIMPARA: {abs(y_end-ya)*100:.0f} cm @ 1cm/5sn (gercek role ACIK)')
         gercek_zimpara(True)                                   # GERCEK role calisir!
         ok = glide(LOW, ya, y_end, CREEP_MPS, spin=SPIN, wall=True)  # duvar-saatiyle surun
