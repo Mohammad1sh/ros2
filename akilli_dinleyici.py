@@ -239,28 +239,50 @@ def bekle_25N(label, pose):
     return True
 
 def cluster(dets):
-    """tespitler -> disk-farkindalikli bolgeler:
-    her tespit ±DISK_R araligina genisletilir, kesisenler birlesir.
-    Boylece 10cm disk icine giren yakin capaklar TEK bolge olur."""
-    iv = []
+    """Kare-tespitleri -> CAPAK NOKTALARI -> bolgeler.
+    1) Her karedeki kutular metreye eslenir; harita DISINA dusenler COPE atilir
+       (eskiden uclara yapistiriliyordu -> bolgeler boydan boya sisiyordu).
+    2) 3cm toleransla 1D gruplama + KALICILIK filtresi (yeterince karede
+       gorulmeyen hayaletler elenir) -> her capagin MEDYAN konumu = 1 nokta.
+    3) Noktalar arasi bosluk <= GAP_M (disk capi) ise ayni iniste taranir;
+       buyukse KALK-GEC (in-zimpara-kalk). Disk MERKEZI ilk noktaya iner,
+       son noktaya kadar gider.
+    Donus: (bolgeler[(y0,y1)], noktalar[(y, px)])"""
+    hepsi = []                               # (y, px)
     for frame in dets:
         for b in frame:
             dy = (b['x'] - FRAME_W / 2) * PX2M * AXIS_SIGN
-            y = max(Y_MIN, min(Y_MAX, SCAN_Y + dy))
-            iv.append((y - DISK_R, y + DISK_R))
-    if not iv: return []
-    iv.sort()
-    merged = [list(iv[0])]
-    for a, b in iv[1:]:
-        if a <= merged[-1][1] + 1e-9:      # kesisiyor/degiyor -> birlestir
-            merged[-1][1] = max(merged[-1][1], b)
+            y = SCAN_Y + dy
+            if Y_MIN - 0.02 <= y <= Y_MAX + 0.02:
+                hepsi.append((min(max(y, Y_MIN), Y_MAX), float(b['x'])))
+    if not hepsi:
+        return [], []
+    hepsi.sort()
+    # -- 1D gruplama (3cm) --
+    gruplar = [[hepsi[0]]]
+    for y, px in hepsi[1:]:
+        if y - gruplar[-1][-1][0] <= 0.03:
+            gruplar[-1].append((y, px))
         else:
-            merged.append([a, b])
-    # kullanici kurali: disk MERKEZI ilk capaga iner (a+R), son capaga kadar (b-R)
-    out = []
-    for a, b in merged:
-        out.append((max(Y_MIN, a + DISK_R), min(Y_MAX, b - DISK_R)))
-    return [(min(a, b), max(a, b)) for a, b in out]
+            gruplar.append([(y, px)])
+    # -- kalicilik: en az 3 gozlem (veya kare sayisinin 1/5'i) --
+    esik = max(3, len(dets) // 5)
+    noktalar = []
+    for g in gruplar:
+        if len(g) >= esik:
+            g_y  = sorted(v[0] for v in g)
+            g_px = sorted(v[1] for v in g)
+            noktalar.append((g_y[len(g_y)//2], g_px[len(g_px)//2]))
+    if not noktalar:
+        return [], []
+    # -- noktalardan bolgeler: bosluk > GAP_M ise ayri inis --
+    bolgeler = [[noktalar[0][0], noktalar[0][0]]]
+    for y, _ in noktalar[1:]:
+        if y - bolgeler[-1][1] <= GAP_M:
+            bolgeler[-1][1] = y
+        else:
+            bolgeler.append([y, y])
+    return [(a, b) for a, b in bolgeler], noktalar
 
 print('╔════════════════════════════════════════════════╗')
 print('║ AKILLI DINLEYICI HAZIR — mini PC\'de START\'a bas ║')
@@ -309,9 +331,13 @@ while rclpy.ok():
         state['emergency'] = False; state['stop'] = False
         to_park(); log_gui('Iptal edildi -> parkta.'); continue
 
-    bolgeler = cluster(state['dets'])
-    print(f'{sum(len(f) for f in state["dets"])} tespit -> {len(bolgeler)} bolge: '
-          + ', '.join(f'[{a:+.2f}..{b:+.2f}]' for a, b in bolgeler), flush=True)
+    bolgeler, noktalar = cluster(state['dets'])
+    log_gui(f'{sum(len(f) for f in state["dets"])} kare-tespit -> '
+            f'{len(noktalar)} capak noktasi -> {len(bolgeler)} bolge')
+    for y, px in noktalar:
+        log_gui(f'  capak: goruntu x={px:.0f}px (%{100*px/FRAME_W:.0f}) -> y={y:+.3f} m')
+    for i, (a, b) in enumerate(bolgeler, 1):
+        log_gui(f'  bolge {i}: [{a:+.3f} .. {b:+.3f}] m ({abs(b-a)*100:.0f} cm)')
 
     if not bolgeler:
         print('Tespit YOK -> geri cekiliyor, park.', flush=True)
