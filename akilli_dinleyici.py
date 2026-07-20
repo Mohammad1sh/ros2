@@ -211,19 +211,15 @@ def bekle_25N(label, pose):
         send(pose); rclpy.spin_once(n, timeout_sec=0.05)
         orn.append(state['force'])
     orn.sort(); dara = orn[len(orn)//2] if orn else 0.0
-    log_gui(f'{label}: dara={dara:.1f} alindi -> SIMDI BASTIR (hedef: dara ustune +25..+50N)')
+    log_gui(f'{label}: dara={dara:.1f} alindi -> SIMDI BASTIR (+25N ustu yeterli)')
     t0 = time.time(); last_p = -1; ardarda = 0; son_uyari = 0.0
     while time.time() - t0 < 60.0:
         if iptal(): return False
         send(pose)                      # pozu tut
         rclpy.spin_once(n, timeout_sec=0.05)
         d = state['force'] - dara       # dara ustu NET kuvvet
-        if d > 50.0:                    # cok sert — sayma; uyariyi 2 sn'de bir bas
-            ardarda = 0
-            if time.time() - son_uyari > 2.0:
-                son_uyari = time.time()
-                log_gui(f'{label}: COK SERT (net +{d:.1f}N)! biraz gevset — hedef +25..+50N')
-        elif d >= FORCE_N:              # gecerli temas bandi: +25..+50N
+        if d >= FORCE_N:                # +25N ustu HER basis temas sayilir
+                                        # (hucre olcegi buyuk: normal basis ~+700N okunuyor)
             ardarda += 1
             if ardarda >= 3:            # 3 ardisik okuma: gercek temas
                 log_gui(f'{label}: TEMAS ✓ net +{d:.1f}N — zimpara basliyor!')
