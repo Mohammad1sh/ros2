@@ -94,7 +94,7 @@ fi
 # ── 3) Akıllı dinleyici (ön planda, BEKÇİLİ: düşerse yeniden başlar) ──
 echo "[3/3] Akıllı dinleyici başlıyor..."
 while true; do
-    python3 -u "$WS/akilli_dinleyici.py"
+    python3 -u "$WS/akilli_dinleyici.py" 2>&1 | tee -a /home/sheik/dinleyici.log
     echo "[GUARD] dinleyici kapandı — 3 sn sonra yeniden başlıyor (çıkmak: Ctrl+C)"
     sleep 3
 done
