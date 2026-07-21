@@ -285,12 +285,12 @@ def to_park(from_y=None, acele=False):
         return                          # zaten parkta — kimildama, sicrama yok
     state['park_modu'] = True           # bu donus KESILMEZ
     try:
-        _park_git(from_y, hiz, segs, segp)
+        _park_git(from_y, hiz, segs, acele)
     finally:
         state['park_modu'] = False
         state['emergency'] = False; state['stop'] = False   # yankilari yut
 
-def _park_git(from_y, hiz, segs, segp):
+def _park_git(from_y, hiz, segs, acele):
     # 1) kol ASAGIDAYSA once dikey kalk (yatay hareket sasiyi sıyırmasin)
     if state.get('lvl') == 'LOW' and state.get('y_son') is not None:
         ys = state['y_son']
