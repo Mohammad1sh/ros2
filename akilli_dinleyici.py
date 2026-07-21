@@ -58,6 +58,7 @@ def gercek_zimpara(acik):
 FORCE_N      = 25.0          # zimpara baslama sarti (gercek load cell, Newton)
 FORCE_WAIT_S = 120.0         # 25N bekleme ust siniri (sim-sn); dolarsa uyariyla devam
 DISK_R       = 0.05          # disk yaricapi (kumeleme icin)
+MIN_PAS      = 0.05          # tek capak bile en az 5 cm zimparalanir (25 sn)
 
 state = {'emergency': False, 'stop': False, 'start': False, 'dets': [],
          'force': 0.0, 'y_son': None, 'lvl': 'HIGH', 'gorev': False,
@@ -568,8 +569,13 @@ while rclpy.ok():
     log_gui('Kamera kutusu kapaniyor...')
     kamera_kutusu(False)
     if iptal():
+        acil = state['emergency']
         state['emergency'] = False; state['stop'] = False; state['gorev'] = False
-        to_park(acele=True); log_gui('Iptal edildi -> parkta.'); continue
+        if acil:
+            log_gui('EMERGENCY — PARK\'a donuluyor'); to_park(acele=True)
+        else:
+            log_gui('STOP — kol oldugu yerde bekliyor')
+        continue
 
     bolgeler, noktalar = cluster(state['dets'])
     log_gui(f'{sum(len(f) for f in state["dets"])} kare-tespit -> '
@@ -588,7 +594,9 @@ while rclpy.ok():
     cur_y = None
     state['lvl'] = 'HIGH'; state['y_son'] = SCAN_Y
     for bi, (ya, yb) in enumerate(bolgeler, 1):
-        y_end = max(yb, ya + 0.01)   # min 1cm ilerleme (tek capak = 5sn)
+        # Tek capakta bile disk capinin yarisi kadar pas at (5cm = 25 sn):
+        # 1cm'lik pas gorsel olarak "hic zimparalamadi" gibi duruyordu.
+        y_end = ya + max(yb - ya, MIN_PAS)
         etiket = f'BOLGE {bi}/{len(bolgeler)}'
         entry = table_at(HIGH, ya)
         state['y_son'] = ya
@@ -631,17 +639,19 @@ while rclpy.ok():
         # kalkis (zorla=True: iptal bayragi kalkisi engelleyemez), (3) bayraklar
         # TEMIZLENIR ki park koridoru kesintisiz oynasin — yoksa kol koridoru
         # atlayip dogrudan park referansina sicrar (tehlikeli).
-        sebep = 'EMERGENCY' if state['emergency'] else 'STOP'
-        log_gui(f'{sebep}! role kapatildi — HIZLI kalkis + parka donus')
+        acil = state['emergency']
         kamera_kutusu(False)
         ys = state['y_son'] if state['y_son'] is not None else SCAN_Y
-        if state['lvl'] == 'LOW':
+        if state['lvl'] == 'LOW':                    # her iki durumda da once KALK
             move_seg(table_at(LOW, ys), table_at(HIGH, ys), 0.8, zorla=True)
             state['lvl'] = 'HIGH'
-        state['emergency'] = False; state['stop'] = False
-        state['gorev'] = False   # park donusu sirasinda bayrak yankilanmasin
-        to_park(from_y=ys, acele=True)
-        log_gui('Iptal tamamlandi — kol parkta. Tekrar START bekleniyor')
+        state['emergency'] = False; state['stop'] = False; state['gorev'] = False
+        if acil:
+            log_gui('EMERGENCY! her sey durdu — PARK\'a donuluyor')
+            to_park(from_y=ys, acele=True)
+            log_gui('EMERGENCY tamam — kol parkta')
+        else:
+            log_gui('STOP! her sey durdu — kol OLDUGU YERDE bekliyor (park yok)')
     else:
         state['gorev'] = False
         log_gui('Tum bolgeler bitti -> PARK\'a donuluyor')
