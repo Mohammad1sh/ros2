@@ -35,4 +35,4 @@
   # gz_ros2_control eklem pozisyon takip kazancı (varsayılan 0.1 çok yavaştı)
   gz_ros2_control:
     ros__parameters:
-      position_proportional_gain: 2.5
+      position_proportional_gain: 12.0

@@ -111,28 +111,56 @@ def now():
     rclpy.spin_once(n, timeout_sec=0.0)
     return sim['t'] if sim['t'] is not None else time.time()
 
+LAG_MAX   = 0.30    # rad — kol bu kadar geride kalirsa KOMUT ILERLEMEZ (bekler)
+BEKLE_MAX = 2.5     # sn  — bu kadar beklendiyse yine de ilerle (kilitlenme kacisi)
+
 def send(q, spin=0.0):
+    state['son_komut'] = list(q)
     # 7. eksen = kamera kutusu KAPAGI (prismatik 0-0.025m): sim'de de acilip kapanir
     m = Float64MultiArray(); m.data = [float(v) for v in q] + [state.get('kutu_sim', 0.0)]
     pub_j.publish(m)
     z = Float64MultiArray(); z.data = [float(spin)]
     pub_z.publish(z)
 
+def gecikme():
+    """son komut ile GERCEK eklem arasindaki en buyuk fark (rad)"""
+    q = state.get('son_komut')
+    if not q or not all(k in jstate for k in JNAMES): return 0.0
+    return max(abs(jstate[k] - q[i]) for i, k in enumerate(JNAMES))
+
 def move_seg(q0, q1, dur, spin=0.0, zorla=False):
-    """iki poz arasi kosinuslu, sim-saatli, surekli yayinla.
-    zorla=True: iptal bayragina BAKMA (guvenli kalkis icin)."""
-    t0 = now(); import numpy as np
+    """Iki poz arasi kosinuslu gecis — GECIKME KAPILI:
+    kol komutun >LAG_MAX gerisine duserse sanal zaman DURUR, komut kolu
+    beklemeye alir. Boylece komut kolun onune gecip onu savurmaz."""
+    import numpy as np
     q0 = np.array(q0); q1 = np.array(q1)
+    ts = 0.0; bekl = 0.0; t_son = time.time()
     while True:
         if not zorla and iptal(): return False
-        t = now() - t0
-        a = min(1.0, t / max(dur, 1e-3))
-        a = 0.5 - 0.5 * math.cos(math.pi * a)
-        send((1 - a) * q0 + a * q1, spin)
-        if t >= dur: return True
+        wt = time.time(); dt = min(wt - t_son, 0.1); t_son = wt
+        if gecikme() < LAG_MAX or bekl > BEKLE_MAX:   # kol yetisiyorsa ilerle
+            ts += dt; bekl = 0.0                      # (kilitlenmeye karsi kacis)
+        else:
+            bekl += dt
+        a = min(1.0, ts / max(dur, 1e-3))
+        a_s = 0.5 - 0.5 * math.cos(math.pi * a)
+        send((1 - a_s) * q0 + a_s * q1, spin)
+        if a >= 1.0: return True
         rclpy.spin_once(n, timeout_sec=0.01); time.sleep(0.01)
 
+def yol_basina_git(q0, sure=6.0):
+    """Yolu oynatmadan ONCE kolu yolun BASINA getir. Kol baska yerdeyse
+    yol adimlari kucuk oldugu icin kapi kilitlenirdi; bu onu onler."""
+    if all(k in jstate for k in JNAMES):
+        e = max(abs(jstate[k] - q0[i]) for i, k in enumerate(JNAMES))
+        if e > 0.10:
+            log_gui(f'  yol basina hizalaniyor (fark {e:.2f} rad)')
+            move_seg([jstate[k] for k in JNAMES], list(q0), max(1.0, e * 1.2), zorla=True)
+            bekle_varis(list(q0), 0.08, sure)
+    return True
+
 def play_path(path, per_seg=None, spin=0.0):
+    yol_basina_git(path[0])
     for k in range(1, len(path)):
         if not move_seg(path[k-1], path[k], per_seg or TRAVERSE_S, spin):
             return False
@@ -152,12 +180,15 @@ def glide(table, y0, y1, speed, spin=0.0, wall=False):
     """hat boyunca y0->y1, verilen hizla (m/s). wall=True -> duvar saatiyle
     (kullaniciya gercek saniye; cok yavas hizlarda takip guvenli)"""
     dist = abs(y1 - y0); dur = dist / max(speed, 1e-6)
-    clk = time.time if wall else now
-    t0 = clk()
+    ts = 0.0; bekl = 0.0; t_son = time.time()
     while True:
         if iptal(): return False
-        t = clk() - t0
-        a = min(1.0, t / max(dur, 1e-3))
+        wt = time.time(); dt = min(wt - t_son, 0.1); t_son = wt
+        if gecikme() < LAG_MAX or bekl > BEKLE_MAX:   # GECIKME KAPISI (+kacis)
+            ts += dt; bekl = 0.0
+        else:
+            bekl += dt
+        a = min(1.0, ts / max(dur, 1e-3))
         y = y0 + (y1 - y0) * a
         state['y_son'] = y            # iptalde guvenli kalkis icin konum izi
         send(table_at(table, y), spin)
@@ -180,9 +211,11 @@ def to_park(from_y=None, acele=False):
     """GERI-BESLEMELI park donusu: yuksek hatta scan hizasina -> scan ->
     ayna yol -> park (eklemler VARANA kadar yayin).
     acele=True: EMERGENCY/STOP icin hizli geri cekilme."""
-    hiz  = 0.35 if acele else 0.20     # her sey bitince park HEMEN olsun
-    segs = 0.9  if acele else 1.5
-    segp = 0.07 if acele else 0.10
+    # koridor artik 161 poz (yogunlastirildi, MAX 0.12 rad/adim) — gecikme
+    # kapisi guvenligi sagladigi icin adim suresi kisa tutulabilir
+    hiz  = 0.30 if acele else 0.22     # her sey bitince park HEMEN olsun
+    segs = 0.9  if acele else 1.4
+    segp = 0.055 if acele else 0.07
     if parkta():
         return                          # zaten parkta — kimildama, sicrama yok
     # AKILLI BASLANGIC: kol ZATEN tarama pozundaysa referansi HIGH girisine
@@ -311,6 +344,9 @@ def asamali_inis(etiket, ya):
             a_su = a0 + (a1 - a0) * t
             send(karisim(ya, a_su))
             rclpy.spin_once(n, timeout_sec=0.03); time.sleep(0.02)
+            if gecikme() > LAG_MAX:      # kol INIYEMIYOR = fiziksel engel
+                log_gui(f'{etiket}: kol bloke ({gecikme():.2f} rad) — temas kabul, inis durdu')
+                return ('TEMAS', a_su)
             d = state['force'] - dara
             if d >= FORCE_N:
                 log_gui(f'{etiket}: TEMAS ✓ net +{d:.1f}N — inis durdu, zimpara basliyor')
@@ -343,12 +379,15 @@ def glide_blend(y0, y1, a, speed, spin=0.0, wall=False):
     LOW seviyesine zorlanirdi; temas LOW'un ustunde olustuysa bu ANI DALIS
     demekti (sasiye/yere carpmanin ikinci kaynagi)."""
     dist = abs(y1 - y0); dur = dist / max(speed, 1e-6)
-    clk = time.time if wall else now
-    t0 = clk()
+    ts = 0.0; bekl = 0.0; t_son = time.time()
     while True:
         if iptal(): return False
-        t = clk() - t0
-        p = min(1.0, t / max(dur, 1e-3))
+        wt = time.time(); dt = min(wt - t_son, 0.1); t_son = wt
+        if gecikme() < LAG_MAX or bekl > BEKLE_MAX:   # GECIKME KAPISI (+kacis)
+            ts += dt; bekl = 0.0
+        else:
+            bekl += dt
+        p = min(1.0, ts / max(dur, 1e-3))
         y = y0 + (y1 - y0) * p
         state['y_son'] = y
         send(karisim(y, a), spin)
