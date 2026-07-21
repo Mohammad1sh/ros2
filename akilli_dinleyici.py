@@ -22,7 +22,7 @@ FRAME_W      = 1280          # vision_node kare genisligi (px)
 VIEW_W_M     = 0.90          # 25cm yukseklikte gorus genisligi (m)
 PX2M         = VIEW_W_M / FRAME_W
 AXIS_SIGN    = -1.0          # goruntu-x -> robot-y isareti (gerekirse +1 yap)
-SCAN_Y       = -0.129        # tarama pozunun y'si (goruntu merkezi buraya bakar)
+SCAN_Y       = -0.100        # tarama pozunun y'si (yeni esik hattinin merkezi)
 CAM_WINDOW_S = 15.0          # tespit toplama suresi (kamera acilma gecikmesi dahil)
 GAP_M        = 0.10          # bu boslugtan buyukse KALK-GEC (disk capi)
 CREEP_MPS    = 0.01 / 5.0    # 1 cm / 5 sn
@@ -366,7 +366,8 @@ def _kullanilmiyor_bekle_25N(label, pose):  # ESKI YONTEM — asamali_inis geldi
             log_gui(f'   bekleniyor... net +{state["force"]-dara:.1f}N ({el}sn/60sn)')
     return False
 
-SPAN = 0.155   # HIGH(z=0.300) ile LOW(z=0.145) arasi dusey mesafe (m)
+SPAN = 0.151   # HIGH(z=0.600) ile LOW(z=0.449) arasi dusey mesafe (m)
+               # esik ust yuzeyi z=0.439 -> LOW'da disk esige DEGER
 
 def bekle_varis(q, tol=0.05, sure=6.0, etiket=''):
     """Hedef pozu YAYINLAMAYA devam ederek eklemlerin gercekten VARMASINI bekle.
