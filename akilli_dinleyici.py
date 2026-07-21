@@ -103,7 +103,13 @@ def on_status(m):
         onceki = state.get('em_onceki')      # ILK mesaj taban sayilir (None)
         # GOREV SIRASINDA: seviye tetik (basis aninda yakala, kacirma).
         # BOSTA: kenar tetik (mini PC'nin takili kalmis 'true'su park dongusu yapmasin).
-        if e and (state.get('gorev') or (onceki is not None and not onceki)):
+        if not e:
+            state['em_hazir'] = True      # 'false' gorulmeden seviye tetigi ACILMAZ
+        # Gorev sirasinda seviye tetik — AMA once bir kez 'false' gorulmeli;
+        # yoksa mini PC'nin onceki gorevden takili kalan 'true'su yeni gorevi
+        # daha ilk saniyede iptal ediyordu (olculdu: START -> aninda park).
+        if e and ((state.get('gorev') and state.get('em_hazir'))
+                  or (onceki is not None and not onceki)):
             state['emergency'] = True
         state['em_onceki'] = e
     except Exception:
@@ -164,35 +170,48 @@ def yol_basina_git(q0, sure=6.0):
         if e > 0.10:
             # OLCULEN: 0.8 rad/s guvenli rampa; VARANA KADAR bekle (yoksa yol
             # kol daha yoldayken baslar -> surekli gecikme -> surunerek ilerler)
-            log_gui(f'  yol basina hizalaniyor (fark {e:.2f} rad)')
-            move_seg([jstate[k] for k in JNAMES], list(q0), max(1.2, e / 0.8), zorla=True)
+            move_seg([jstate[k] for k in JNAMES], list(q0), max(0.8, e / 1.6), zorla=True)
             t0 = time.time()
-            while time.time() - t0 < max(sure, e * 3):
-                send(list(q0)); rclpy.spin_once(n, timeout_sec=0.02); time.sleep(0.03)
-                if all(k in jstate for k in JNAMES):
-                    h = max(abs(jstate[k] - q0[i]) for i, k in enumerate(JNAMES))
-                    if h < 0.10: break
-            log_gui(f'  hizalandi (hata {h:.3f} rad, {time.time()-t0:.1f} sn)')
+            while time.time() - t0 < 5.0:
+                send(list(q0)); rclpy.spin_once(n, timeout_sec=0.02); time.sleep(0.02)
+                if all(k in jstate for k in JNAMES) and \
+                   max(abs(jstate[k] - q0[i]) for i, k in enumerate(JNAMES)) < 0.12:
+                    break
     return True
 
-def play_path(path, per_seg=None, spin=0.0, etiket='yol'):
-    """Yolu oynat — ILERLEME LOGLU ve ZAMAN BUTCELI (asla takilip kalmaz)."""
+import bisect
+
+def play_path(path, hiz=1.3, spin=0.0, zorla=False, **_):
+    """Yolu TEK SUREKLI hareket olarak oynat.
+    ESKI HATA: her ara pozda kosinus profiliyle DURUP kalkiyordu (161 kez
+    dur-kalk = dakikalarca surme). Simdi tum yol tek yay: sadece basta
+    hizlanma, sonda yavaslama. hiz = eklem uzayinda tepe hiz (rad/s)."""
+    import numpy as np
     yol_basina_git(path[0])
-    dur = per_seg or TRAVERSE_S
-    butce = len(path) * dur * 3.0 + 20.0      # gecikme kapisi paylı ust sinir
-    t0 = time.time(); son_log = 0.0
-    for k in range(1, len(path)):
-        if time.time() - t0 > butce:
-            log_gui(f'  {etiket}: zaman butcesi doldu ({k}/{len(path)}) — dogrudan hedefe')
-            move_seg([jstate[j] for j in JNAMES] if all(j in jstate for j in JNAMES) else path[k-1],
-                     path[-1], 2.5, zorla=True)
-            return True
-        if not move_seg(path[k-1], path[k], dur, spin):
-            return False
-        if time.time() - son_log > 2.5:
-            son_log = time.time()
-            log_gui(f'  {etiket}: {k}/{len(path)} ({time.time()-t0:.0f} sn)')
-    return True
+    P = [np.array(q, dtype=float) for q in path]
+    d = [0.0]
+    for i in range(1, len(P)):
+        d.append(d[-1] + float(np.max(np.abs(P[i] - P[i-1]))))
+    toplam = d[-1]
+    if toplam < 1e-6: return True
+    sure = toplam / max(hiz, 0.1)
+    ts = 0.0; bekl = 0.0; kacis = False; t_son = time.time()
+    while True:
+        if not zorla and iptal(): return False
+        wt = time.time(); dt = min(wt - t_son, 0.1); t_son = wt
+        if kacis or gecikme() < LAG_MAX:
+            ts += dt
+        else:
+            bekl += dt
+            if bekl > BEKLE_MAX: kacis = True
+        a = min(1.0, ts / sure)
+        s = (0.5 - 0.5 * math.cos(math.pi * a)) * toplam     # yumusak baslangic/bitis
+        i = max(1, min(bisect.bisect_left(d, s), len(P) - 1))
+        seg = d[i] - d[i-1]
+        u = 0.0 if seg < 1e-9 else (s - d[i-1]) / seg
+        send(P[i-1] + (P[i] - P[i-1]) * u, spin)
+        if a >= 1.0: return True
+        rclpy.spin_once(n, timeout_sec=0.005); time.sleep(0.008)
 
 def table_at(table, y):
     """tabloda y'ye karsilik gelen eklem pozu (komsu interp)"""
@@ -275,14 +294,12 @@ def _park_git(from_y, hiz, segs, segp):
     # 1) kol ASAGIDAYSA once dikey kalk (yatay hareket sasiyi sıyırmasin)
     if state.get('lvl') == 'LOW' and state.get('y_son') is not None:
         ys = state['y_son']
-        log_gui('  once DIKEY kalkis')
         move_seg([jstate[k] for k in JNAMES] if all(k in jstate for k in JNAMES)
-                 else karisim(ys, 1.0), table_at(HIGH, ys), 1.0, zorla=True)
+                 else karisim(ys, 1.0), table_at(HIGH, ys), 0.7, zorla=True)
         state['lvl'] = 'HIGH'
-    # 2) koridora EN YAKIN adimdan geri oyna
+    # 2) koridora EN YAKIN adimdan geri oyna (kisa yol = hizli donus)
     i, d = _en_yakin_koridor()
     if i is not None and d < 0.6:
-        log_gui(f'  koridora giris: adim {i}/{len(T["park_to_scan"])} (fark {d:.2f} rad)')
         path = list(reversed(T['park_to_scan'][:i+1]))
     else:
         # 3) koridordan uzak: once HIGH hatti + tarama pozu
@@ -291,7 +308,7 @@ def _park_git(from_y, hiz, segs, segp):
         move_seg([jstate[k] for k in JNAMES] if all(k in jstate for k in JNAMES)
                  else table_at(HIGH, SCAN_Y), T['scan'], segs, zorla=True)
         path = list(reversed(T['park_to_scan']))
-    if not play_path(path, per_seg=segp):
+    if not play_path(path, hiz=(2.2 if acele else 1.5)):
         # koridor sirasinda YENI acil durum: oldugun yerde SABITLEN (yanki yok)
         if all(k in jstate for k in JNAMES):
             dur = [jstate[k] for k in JNAMES]
@@ -301,19 +318,16 @@ def _park_git(from_y, hiz, segs, segp):
         log_gui('Park donusu kesildi — kol guvenli sekilde sabitlendi')
         return
     # parki eklem geri beslemesiyle kilitle
-    t0 = time.time(); son_log = 0.0
-    while time.time() - t0 < 25:       # kisa kilit: dinleyici hemen bosalir,
-        send(T['park'])                # ikinci START gecikmeden islenir
-        rclpy.spin_once(n, timeout_sec=0.01); time.sleep(0.03)
+    t0 = time.time()
+    while time.time() - t0 < 8:        # kisa kilit (kol zaten yolun sonunda)
+        send(T['park'])
+        rclpy.spin_once(n, timeout_sec=0.01); time.sleep(0.02)
         if all(k in jstate for k in JNAMES):
             err = max(abs(jstate[k] - T['park'][i]) for i, k in enumerate(JNAMES))
-            if err < 0.06:
-                log_gui(f'PARK ✓ ({time.time()-t0:.1f} sn, hata {err:.3f} rad)')
+            if err < 0.08:
+                log_gui(f'PARK ✓ ({time.time()-t0:.1f} sn)')
                 return
-            if time.time() - son_log > 4.0:
-                son_log = time.time()
-                log_gui(f'  parka yaklasiyor... hata {err:.2f} rad')
-    log_gui('Park zaman asimi — kol yaklasik park pozunda')
+    log_gui('PARK (yaklasik)')
 
 def _kullanilmiyor_bekle_25N(label, pose):  # ESKI YONTEM — asamali_inis geldi, cagrilmiyor
     """gercek load cell 25N olana kadar bekle (DUVAR saati, sicrama filtresi).
@@ -391,11 +405,11 @@ def asamali_inis(etiket, ya):
         return ('IPTAL', a_ust)
     bekle_varis(hedef, 0.04, 4.0)          # 5cm ustunde GERCEKTEN dur
     orn = []; t0 = time.time()
-    while time.time() - t0 < 0.8:      # dara: bosta okuma
-        send(hedef); rclpy.spin_once(n, timeout_sec=0.05)
+    while time.time() - t0 < 0.5:      # dara: bosta okuma (kisa)
+        send(hedef); rclpy.spin_once(n, timeout_sec=0.03)
         orn.append(state['force'])
     orn.sort(); dara = orn[len(orn)//2] if orn else 0.0
-    log_gui(f'{etiket}: 5cm ustte dara={dara:.1f} -> asamali inis (kuvvet izleniyor)')
+    log_gui(f'{etiket}: iniyor (temas icin kuvvet izleniyor)')
 
     def in_ve_izle(a0, a1, sure):
         """a0'dan a1'e in; temas olursa TEMASIN OLDUGU DERINLIGI dondur."""
@@ -526,10 +540,11 @@ while rclpy.ok():
     state['dets'] = []
     state['emergency'] = False; state['stop'] = False   # bayat bayrak temizligi
     state['gorev'] = True        # gorev basladi: e-stop artik SEVIYE tetikli
+    state['em_hazir'] = False    # ...ama once mini PC'nin 'false' demesini bekle
     state['lvl'] = 'HIGH'; state['y_son'] = None
     gercek_zimpara(False)        # onceki kosudan takili kalmis roleyi KAPAT
     log_gui('START alindi -> kol tarama pozuna gidiyor (esik +25cm)...')
-    if not play_path(T['park_to_scan'], per_seg=0.08):   # ~13 sn (olculen guvenli hiz)
+    if not play_path(T['park_to_scan'], hiz=1.6):        # tek surekli hareket
         to_park(acele=True); continue
     bekle_varis(T['scan'], 0.06, 6.0, 'TARAMA')          # gercekten VARDIGINI dogrula
     log_gui('  tarama pozunda ✓')
