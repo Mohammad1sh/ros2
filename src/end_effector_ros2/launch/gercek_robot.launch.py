@@ -52,6 +52,8 @@ def generate_launch_description():
                               description='Robot modeli (bu proje: h2515)'),
         DeclareLaunchArgument('name',     default_value='dsr01',
                               description='ROS ad alani (namespace)'),
+        DeclareLaunchArgument('mode',     default_value='real',
+                              description="real=gercek robot | virtual=Doosan EMULATORU (Docker) — sahasiz test"),
     ]
 
     # ── 1) DOOSAN RESMI SURUCUSU — REAL modda IP'ye baglanir ──────────────
@@ -69,7 +71,7 @@ def generate_launch_description():
             'host':    robot_ip,        # <<< SAHADA VERILEN IP BURAYA GIDER
             'rt_host': rt_host,
             'port':    '12345',
-            'mode':    'real',          # <<< GERCEK ROBOT (virtual DEGIL)
+            'mode':    LaunchConfiguration('mode'),   # real | virtual(emulator)
             'model':   model,
             'color':   'white',
             'gui':     'false',         # RViz istemiyoruz (headless calisir)
