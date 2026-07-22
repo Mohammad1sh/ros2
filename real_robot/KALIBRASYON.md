@@ -13,63 +13,67 @@ Doosan'in resmi DRCF emulatorunde uctan uca test edildi (bkz. EMULATOR_TEST.md):
 - [x] TAM GOREV: mini PC arayuzundeki GERCEK START butonu -> tarama -> tespit ->
       inis -> temas -> role ACIK zimpara -> kalkis -> park (RViz'de izlendi)
 
-## 00. SAHA KURULUMU — SAHADA LAPTOP YOK, HER SEY MINI PC'DE
+## 00. SAHA KURULUMU
 Mini PC'de zaten var: ros2-end-effector calisma alani, vision/can/logic/GUI.
-Sahadan ONCE mini PC'ye eklenecek iki sey:
-- [ ] Repo guncellemesi: `cd ~/ros2-end-effector && git pull`
-      (beynin GERCEK modu, real_robot/, gercek_robot.launch.py, poz_tablosu.json)
-- [ ] Doosan resmi surucusu (laptopta gitignore'lu — repo'da YOK, ayri kurulur):
-      `cd ~/ros2-end-effector/src`
-      `git clone -b humble https://github.com/DoosanRobotics/doosan-robot2.git`
-      `cd .. && rosdep install -i --from-path src/doosan-robot2 -y`
-      `colcon build --packages-up-to dsr_bringup2 dsr_controller2 && source install/setup.bash`
-- [ ] Dogrulama (robot olmadan): `ros2 launch dsr_bringup2 dsr_bringup2_rviz.launch.py`
-      hatasiz aciliyor mu (mode virtual, docker yoksa surucu baglanti bekler — normal)
 
 SAHADA CALISTIRMA (iki pencere):
 1. `~/minipc_baslat.sh`  (GUI + vision + can + logic — bugunku gibi; zenoh bos calisir, zarari yok)
 2. `ros2 launch end_effector_ros2 gercek_robot.launch.py robot_ip:=<FIRMANIN_IP> sensorler:=false`
    (`sensorler:=false` SART: vision/can'i minipc_baslat zaten acti — cift dugum olmasin.
-    Beyin GERCEK_ROBOT=1 ile launch icinden kalkar; laptop/zenoh YOK, her sey yerel DDS.)
-
-MINI PC CLAUDE'A VERILECEK PROMPT (kopyala-yapistir):
-"~/ros2-end-effector reposunu git pull yap. src/ altina DoosanRobotics/doosan-robot2
-humble dalini klonla, rosdep ile bagimliliklari kur, `colcon build --packages-up-to
-dsr_bringup2 dsr_controller2` ile derle, install/setup.bash'i .bashrc'ye ekli oldugunu
-dogrula. Sonra `ros2 launch end_effector_ros2 gercek_robot.launch.py` --show-args ile
-launch'in gorundugunu kanitla. Robot IP'si henuz yok; baglanti deneme. Bitince derleme
-ciktisindaki hata/uyari ozetini raporla."
+    Beyin GERCEK_ROBOT=1 ile launch icinden kalkar; her sey yerel DDS.)
 
 ## 0. Baglanti (kol basinda)
+TEK CALISTIRMA KOMUTU launch'tir — real_kol_surucu.py ELLE CALISTIRILMAZ,
+beyin onu kendi icinde otomatik kullanir. (Toplantida istenen "tek launch" bu.)
 - [ ] Doosan kontrolcu IP: ________ (firma verecek)
 - [ ] Mini PC ayni agda, ping atiyor
 - [ ] `ros2 launch end_effector_ros2 gercek_robot.launch.py robot_ip:=<IP> sensorler:=false`
-- [ ] /dsr01/joint_states akiyor mu: `ros2 topic hz /dsr01/joint_states` (~100Hz beklenir)
-- [ ] Kolu elle jog yap — pozlar canli degisiyor mu?
-- [ ] ILK HAREKET: bos alanda, dusuk hizda tek movej — beklenen yere gitti mi?
-      (real_kol_surucu.py VEL_TASIMA=25 derece/sn — ilk gun DUSUK TUT)
+- [ ] Poz akisi test: ikinci terminalde `ros2 topic hz /dsr01/joint_states` -> ~100Hz
+- [ ] JOG testi: "jog" = Doosan'in EL KUMANDASI (teach pendant/tablet) uzerindeki
+      yon tuslariyla kolu elle oynatmak. Kumandayla kolu oynatirken ikinci
+      terminalde `ros2 topic echo /dsr01/joint_states --field position` acik olsun:
+      sayilar kolla birlikte ANLIK degisiyorsa baglanti canli demektir.
+- [ ] ILK HAREKET dusuk hizla: hiz sabiti real_robot/real_kol_surucu.py dosyasinin
+      BASINDA `VEL_TASIMA` (tasima hizi, derece/sn; su an 25). Ilk gun bunu 10'a
+      indir, START ile tek gorev dene; sorun yoksa 25'e geri al. "Dusuk tut" = bu sayi.
 
-## 1. Esik z yuksekligi (touch-off) — SONRASINDA TABLOLAR YENIDEN URETILIR
-- [ ] Kolu jog ile disk esige DEGENE kadar indir (load cell ~5N gosterir)
-- [ ] O andaki TCP z degerini oku: z_gercek = ________ m
-- [ ] Esik cizgisinin x'i ve y-araligi da olculur: x=______ y=[______,______]
-- [ ] tablo_uret.py bu olculerle calistirilip poz_tablosu.json YENIDEN uretilir
-      (sim degerleri: cizgi x=-0.595, ust z=0.439 — sahada FARKLI olacak)
+## 1. Esik z yuksekligi (touch-off) -> TABLO YENIDEN URETIMI
+NIYE TABLO? Beyin sahada CANLI hesap (IK) YAPMAZ — bilincli karar: canli IK
+dallari simde kolu savuruyordu, koku buydu. Kolun ugrayacagi TUM pozlar onceden
+tablo_uret.py ile hesaplanip poz_tablosu.json'a yazilir; beyin gorevde SADECE bu
+tablodan okur (deterministik, surprizsiz). Tablo simdeki esik olculerine gore
+uretildi; sahadaki esik baska yerde olacagi icin BIR KEZ yeniden uretilir (~5 dk).
+- [ ] Jog ile diski esige DEGENE kadar indir (load cell ~5N gosterir)
+- [ ] TCP z NEREDEN OKUNUR: Doosan el kumandasinin durum ekraninda TCP/pozisyon
+      satiri X,Y,Z (mm) gosterir. Oradan: z_gercek = ________ m
+- [ ] Ayni ekrandan esik cizgisi: diski esigin BIR ucuna getir (x,y oku), sonra
+      OBUR ucuna getir (y oku) -> x=______ y=[______,______]
+- [ ] Bu uc olcuyle tablo_uret.py calistirilir -> poz_tablosu.json yeniden uretilir.
+      (O gun komutu bana yazdirirsin; laptop gerekmiyorsa mini PC Claude'a yaptirilir.)
 
-## 2. Kamera-robot eksen esleme (AXIS_SIGN testi)
-- [ ] Kol tarama pozunda, kamera acik
-- [ ] Esigin SOL ucuna bir kagit parcasi koy
-- [ ] Sistem capagi solda gosterip kolu SOLA mi goturuyor?
-- [ ] Ters gidiyorsa: akilli_dinleyici.py'de AXIS_SIGN = +1.0 yap (su an -1.0)
+## 2. Kamera SOL/SAG yonu robotla ayni mi? (AXIS_SIGN)
+AMAC: goruntude SOLDA gorunen capak icin kol GERCEKTEN sola gitmeli. Kamera ters
+monteliyse kol capagin TERS tarafina iner — 1 dakikalik testle anlasilir:
+- [ ] Kol tarama pozunda, kamera acik, GUI'de canli goruntu var
+- [ ] Esigin SOL ucuna YOLO'nun capak sanacagi bir isaret koy (tebesir izi veya
+      koyu bant; tespit cikmazsa farkli isaret dene)
+- [ ] GUI'de tespit kutusu SOL tarafta mi? Dinleyici logundaki "y=..." degeri
+      sol tarafa mi dusuyor? Kol o yone mi gidiyor?
+- [ ] TERS ise: akilli_dinleyici.py'de AXIS_SIGN = +1.0 yap (su an -1.0, tek satir)
 
-## 3. Piksel-metre olcegi (PX2M dogrulama)
-- [ ] Tarama yuksekligi tam 25 cm mi? Metre ile olc: ________ cm
-- [ ] Esik uzerine 20 cm arayla iki isaret koy
-- [ ] Tespit piksellerinden hesaplanan mesafe: ________ cm
-- [ ] Sapma >%10 ise: VIEW_W_M degerini olculen genislikle degistir
+## 3. "1 piksel kac metre?" (PX2M / VIEW_W_M dogrulama)
+VIEW_W_M = kameranin 25cm yukseklikten gordugu alanin GERCEK genisligi (su an
+0.90m VARSAYIM). Capagin y konumu bununla hesaplanir; yanlissa kol capagin tam
+ustune degil YANINA iner. Test:
+- [ ] Tarama yuksekligi gercekten ~25cm mi? Metreyle olc: ________ cm
+- [ ] Esige CETVELLE tam 20cm arayla iki isaret koy
+- [ ] Gorevi role KAPALI baslat; dinleyici logu her tespit icin "capak: ... y=..."
+      yazar. Iki isaretin y farkini logdan oku: ________ cm
+- [ ] 20cm'den sapma >%10 ise: VIEW_W_M_yeni = 0.90 x (20 / olculen_cm)
+      -> akilli_dinleyici.py basindaki VIEW_W_M'ye yaz
 
 ## 4. Load cell
-- [ ] Bos durumda okuma ~0N mi? (beyin iniste OTOMATIK dara alir; yine de kontrol)
+- [ ] Bos durumda okuma ~0N mi? 
 - [ ] Uzerine bilinen agirlik koy (or. 2 kg = 19.6N): okuma ________ N
 - [ ] 25-50N bandi elle bastirarak GUI panelinde dogrulaniyor mu?
 
