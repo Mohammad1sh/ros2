@@ -10,9 +10,14 @@ Akis (mini PC arayuzunde START'a basilinca):
   5. Bitince (veya hic tespit yoksa) geri cekilir ve PARK'a doner
 EMERGENCY STOP: aninda kalk + park.
 """
-import json, math, os, time
+import json, math, os, sys, time
 import rclpy
 from std_msgs.msg import Bool, String, Float64MultiArray
+
+# ── GERCEK ROBOT MODU ────────────────────────────────────────────────────
+# GERCEK_ROBOT=1 ortam degiskeniyle acilir (gercek_robot.launch.py ayarlar).
+# Kapaliyken (sim) davranis BIREBIR eskisi gibidir.
+GERCEK = os.environ.get('GERCEK_ROBOT', '0') == '1'
 
 WS = os.path.expanduser('~/ros2-end-effector')
 T = json.load(open(os.path.join(WS, 'poz_tablosu.json')))
@@ -130,6 +135,8 @@ BEKLE_MAX = 2.5     # sn  — bu kadar beklendiyse yine de ilerle (kilitlenme ka
 
 def send(q, spin=0.0):
     state['son_komut'] = list(q)
+    if GERCEK:
+        return          # gercek robot poz akisi kabul etmez; hareket movej'le
     # 7. eksen = kamera kutusu KAPAGI (prismatik 0-0.025m): sim'de de acilip kapanir
     m = Float64MultiArray(); m.data = [float(v) for v in q] + [state.get('kutu_sim', 0.0)]
     pub_j.publish(m)
@@ -138,11 +145,15 @@ def send(q, spin=0.0):
 
 def gecikme():
     """son komut ile GERCEK eklem arasindaki en buyuk fark (rad)"""
+    if GERCEK: return 0.0            # movej bloklar; gecikme kavrami yok
     q = state.get('son_komut')
     if not q or not all(k in jstate for k in JNAMES): return 0.0
     return max(abs(jstate[k] - q[i]) for i, k in enumerate(JNAMES))
 
 def move_seg(q0, q1, dur, spin=0.0, zorla=False):
+    if GERCEK:
+        if not zorla and iptal(): return False
+        return kol.movej(q1, t=max(float(dur), 0.5))
     """Iki poz arasi kosinuslu gecis — GECIKME KAPILI:
     kol komutun >LAG_MAX gerisine duserse sanal zaman DURUR, komut kolu
     beklemeye alir. Boylece komut kolun onune gecip onu savurmaz."""
@@ -183,6 +194,8 @@ def yol_basina_git(q0, sure=6.0):
 import bisect
 
 def play_path(path, hiz=1.3, spin=0.0, zorla=False, **_):
+    if GERCEK:
+        return kol.play_path(path, (lambda: False) if zorla else iptal)
     """Yolu TEK SUREKLI hareket olarak oynat.
     ESKI HATA: her ara pozda kosinus profiliyle DURUP kalkiyordu (161 kez
     dur-kalk = dakikalarca surme). Simdi tum yol tek yay: sadece basta
@@ -225,6 +238,13 @@ def table_at(table, y):
     return list(table[0]['j'] if y < table[0]['y'] else table[-1]['j'])
 
 def glide(table, y0, y1, speed, spin=0.0, wall=False):
+    if GERCEK:
+        adim = 0.008 if speed < 0.01 else 0.02
+        ys = [y0 + (y1 - y0) * k / max(1, int(abs(y1 - y0) / adim))
+              for k in range(0, max(1, int(abs(y1 - y0) / adim)) + 1)]
+        state['y_son'] = y1
+        return kol.surun_noktalar([table_at(table, y) for y in ys],
+                                  adim / max(speed, 1e-6), iptal)
     """hat boyunca y0->y1, verilen hizla (m/s). wall=True -> duvar saatiyle
     (kullaniciya gercek saniye; cok yavas hizlarda takip guvenli)"""
     dist = abs(y1 - y0); dur = dist / max(speed, 1e-6)
@@ -246,9 +266,18 @@ def glide(table, y0, y1, speed, spin=0.0, wall=False):
 
 from sensor_msgs.msg import JointState
 jstate = {}
-n.create_subscription(JointState, '/gz/joint_states',
+# SAHA: gercek robotta eklem durumu /dsr01/joint_states'ten gelir
+_JS_TOPIC = '/dsr01/joint_states' if GERCEK else '/gz/joint_states'
+n.create_subscription(JointState, _JS_TOPIC,
                       lambda m: jstate.update(zip(m.name, m.position)), 10)
 JNAMES = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
+
+kol = None
+if GERCEK:
+    sys.path.insert(0, os.path.join(WS, 'real_robot'))
+    from real_kol_surucu import RealKol
+    kol = RealKol(n, lambda t=0.05: rclpy.spin_once(n, timeout_sec=t))
+    print('>>> GERCEK ROBOT MODU: hareketler Doosan surucusune gidiyor', flush=True)
 
 def parkta():
     """kol su an park pozunda mi? (eklem geri beslemesinden)"""
@@ -370,6 +399,8 @@ SPAN = 0.151   # HIGH(z=0.600) ile LOW(z=0.449) arasi dusey mesafe (m)
                # esik ust yuzeyi z=0.439 -> LOW'da disk esige DEGER
 
 def bekle_varis(q, tol=0.05, sure=6.0, etiket=''):
+    if GERCEK:
+        return True     # movej bloklayarak vardi; ayrica beklemeye gerek yok
     """Hedef pozu YAYINLAMAYA devam ederek eklemlerin gercekten VARMASINI bekle.
     Kritik gecislerde sart: komut ilerledi ama kol geride kaldiysa, bir sonraki
     hareket kolu capraz suruklerdi -> sasiye/yere carpma. (bolge gecisi bugu)"""
@@ -399,7 +430,19 @@ def asamali_inis(etiket, ya):
       3) 5cm sonunda tepki varsa (net >= 10N) 25N'a kadar derinlesmeye devam
       4) Tepki yoksa +5cm daha in (toplam 10cm)
       5) Hala tepki yoksa -> BOSLUK: zimpara yapilmaz, geri cekilme
-    Donus: 'TEMAS' | 'BOS' | 'IPTAL'"""
+    Donus: ('TEMAS'|'BOS'|'IPTAL', a)"""
+    if GERCEK:
+        def dara_al():
+            orn = []
+            t0 = time.time()
+            while time.time() - t0 < 0.6:
+                rclpy.spin_once(n, timeout_sec=0.05); orn.append(state['force'])
+            orn.sort(); return orn[len(orn)//2] if orn else 0.0
+        def kuvvet():
+            rclpy.spin_once(n, timeout_sec=0.02); return state['force']
+        return kol.inis_asamali(lambda a: karisim(ya, a), dara_al, kuvvet,
+                                iptal, lambda m: log_gui(f'{etiket}: {m}'),
+                                esik=FORCE_N, tepki=10.0)
     a_ust = 1 - 0.05 / SPAN            # LOW'un 5cm ustu
     a_alt = 1 + 0.05 / SPAN            # LOW'un 5cm alti
     hedef = karisim(ya, a_ust)
@@ -454,6 +497,13 @@ def asamali_inis(etiket, ya):
     return ('BOS', a_alt)
 
 def glide_blend(y0, y1, a, speed, spin=0.0, wall=False):
+    if GERCEK:
+        adim = 0.008
+        npts = max(1, int(abs(y1 - y0) / adim))
+        ys = [y0 + (y1 - y0) * k / npts for k in range(npts + 1)]
+        state['y_son'] = y1
+        return kol.surun_noktalar([karisim(y, a) for y in ys],
+                                  adim / max(speed, 1e-6), iptal)
     """TEMASIN OLDUGU derinlikte (a) y0->y1 surun. Eskiden zimpara her zaman
     LOW seviyesine zorlanirdi; temas LOW'un ustunde olustuysa bu ANI DALIS
     demekti (sasiye/yere carpmanin ikinci kaynagi)."""

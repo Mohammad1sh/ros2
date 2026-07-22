@@ -1,132 +1,108 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-REAL KOL SURUCU — Doosan H2515 gercek robot adaptoru (ISKELET)
-================================================================
-Simulasyondaki akilli_dinleyici.py'nin KOL KOMUT KATMANININ gercek karsiligi.
-Gorev beyni (tespit -> kumeleme -> 25N kapisi -> 1cm/5sn surunme -> park)
-AYNEN kalir; sadece send/move_seg/glide/play_path fonksiyonlarinin ici
-bu siniftaki cagrilarla degisir.
+REAL KOL SURUCU v2 — Doosan H2515 gercek robot adaptoru
+========================================================
+akilli_dinleyici GERCEK_ROBOT=1 ile calisinca hareket ilkellerini bu sinifa
+yonlendirir. Gorev beyni (kumeleme, 5+5cm inis, 25N, park) HIC degismez.
 
-KURULUM (kol basinda, ~1 gun):
-  1) Doosan kontrolcu IP'sini ogren (fabrika varsayilani: 192.168.137.100)
-  2) Laptopta gercek surucuyu baslat:
-       ros2 launch dsr_bringup2 dsr_bringup2_rviz.launch.py \
-           mode:=real host:=<ROBOT_IP> model:=h2515 name:=dsr01
-     (paket: doosan-robot2, humble dali — launch adi kurulumda dogrulanacak)
-  3) Asagidaki TODO'lari kol basinda tek tek test ederek isaretle.
-  4) KALIBRASYON.md'deki olcumleri yap, poz tablosuna isle.
+Kullanim zinciri:
+  gercek_robot.launch.py -> dsr_bringup2 (mode:=real host:=<IP>)
+                         -> akilli_dinleyici (GERCEK_ROBOT=1) -> RealKol
 
-KRITIK NOTLAR:
-  * dsr servisleri ACI (DERECE) kullanir — poz_tablosu.json RADYAN tutar.
-    Bu sinif donusumu kendisi yapar (rad2deg).
-  * Poz tablosu satirlari 7 deger icerir (6 eklem + servo_joint).
-    Gercek kolda ilk 6 kullanilir; kamera kutusu servosu ve zimpara rolesi
-    zaten mini PC uzerinden suruluyor (servo_command / sander_only).
-  * Simde "komut akitma" vardi; gercekte her hareket BLOKLAYAN servis
-    cagrisidir (movej/movesj). Gorev beyni icin fark yok.
+SAHA NOTLARI (kol basinda dogrulanacak — grep 'SAHA:'):
+  SAHA: servis adlari /dsr01/motion/move_joint & move_spline_joint
+  SAHA: dsr aci birimi DERECE (tablolar radyan -> burada cevrilir)
+  SAHA: /dsr01/joint_states eklem adlari 'joint_1'..'joint_6' mi?
 """
 import math, time
 
-try:
-    import rclpy
-    from dsr_msgs2.srv import MoveJoint, MoveSplineJoint   # doosan-robot2 paketi
-    DSR_VAR = True
-except ImportError:
-    DSR_VAR = False   # laptopta kol yokken de dosya derlenebilsin
-
 R2D = 180.0 / math.pi
-NS = '/dsr01'          # dsr_bringup2 name:=dsr01 ile eslesir
-
-# Guvenli hiz/ivme tavanlari (derece/sn, derece/sn^2) — ILK TESTTE DUSUK TUT!
-VEL_TRANSIT = 20.0     # bolgeler arasi tasima
-ACC_TRANSIT = 20.0
-VEL_CREEP   = 5.0      # inis / surunme
-ACC_CREEP   = 5.0
+NS  = '/dsr01'
+VEL_TASIMA = 25.0     # derece/sn  (ilk testte dusuk tut!)
+ACC_TASIMA = 25.0
+VEL_INIS   = 6.0
+ACC_INIS   = 6.0
 
 
 class RealKol:
-    """akilli_dinleyici'nin kullandigi arayuz: ayni imzalar, gercek servisler."""
-
-    def __init__(self, node):
+    def __init__(self, node, spin_once):
+        """node: rclpy node, spin_once: callback isleme fonksiyonu"""
+        import rclpy
+        from dsr_msgs2.srv import MoveJoint, MoveSplineJoint
+        self.rclpy = rclpy
         self.n = node
-        self.cli_movej  = node.create_client(MoveJoint,       NS + '/motion/move_joint')
-        self.cli_movesj = node.create_client(MoveSplineJoint, NS + '/motion/move_spline_joint')
-        for c in (self.cli_movej, self.cli_movesj):
-            if not c.wait_for_service(timeout_sec=5.0):
-                raise RuntimeError('dsr servisi yok — dsr_bringup2 real modda calisiyor mu?')
+        self.spin = spin_once
+        self.cli_j  = node.create_client(MoveJoint,       NS + '/motion/move_joint')
+        self.cli_sj = node.create_client(MoveSplineJoint, NS + '/motion/move_spline_joint')
+        for ad, c in (('move_joint', self.cli_j), ('move_spline_joint', self.cli_sj)):
+            if not c.wait_for_service(timeout_sec=8.0):
+                raise RuntimeError(f'dsr servisi yok: {ad} — dsr_bringup2 real modda mi?')
 
-    # ---- temel: tek poza git (bloklar) ----------------------------------
-    def movej(self, q_rad7, vel=VEL_TRANSIT, acc=ACC_TRANSIT, t=0.0):
+    # ── temel bloklayan hareket ──────────────────────────────────────────
+    def movej(self, q_rad, vel=VEL_TASIMA, acc=ACC_TASIMA, t=0.0, zaman_asimi=30.0):
+        from dsr_msgs2.srv import MoveJoint
         req = MoveJoint.Request()
-        req.pos = [q * R2D for q in q_rad7[:6]]     # ilk 6 eklem, DERECE
+        req.pos = [float(v) * R2D for v in list(q_rad)[:6]]
         req.vel = float(vel); req.acc = float(acc); req.time = float(t)
-        req.radius = 0.0; req.mode = 0              # mode=0: mutlak  TODO dogrula
-        req.blend_type = 0; req.sync_type = 0       # senkron (bitene dek bekle)
-        fut = self.cli_movej.call_async(req)
-        rclpy.spin_until_future_complete(self.n, fut, timeout_sec=60.0)
-        return fut.result() is not None and fut.result().success
+        req.radius = 0.0; req.mode = 0; req.blend_type = 0; req.sync_type = 0
+        fut = self.cli_j.call_async(req)
+        self.rclpy.spin_until_future_complete(self.n, fut, timeout_sec=zaman_asimi)
+        r = fut.result()
+        return bool(r and getattr(r, 'success', True))
 
-    # ---- yol oynat: park_to_scan gibi coklu-poz yollar ------------------
-    def play_path(self, path_rad, vel=VEL_TRANSIT, acc=ACC_TRANSIT):
-        """Spline ile tum ara pozlardan gecer (simdeki play_path karsiligi)."""
-        req = MoveSplineJoint.Request()
-        req.pos = []
-        for q in path_rad:
-            req.pos.extend([v * R2D for v in q[:6]])
-        req.pos_cnt = len(path_rad)                 # TODO alan adini dogrula
-        req.vel = float(vel); req.acc = float(acc)
-        req.time = 0.0; req.mode = 0; req.sync_type = 0
-        fut = self.cli_movesj.call_async(req)
-        rclpy.spin_until_future_complete(self.n, fut, timeout_sec=180.0)
-        return fut.result() is not None and fut.result().success
+    # ── yol: kisa parcalara bolunmus movej zinciri (iptal edilebilir) ────
+    def play_path(self, path, iptal, vel=VEL_TASIMA):
+        """Uzun spline yerine ~4 pozda bir movej: her parca arasi iptal bakilir.
+        (Tek buyuk spline yazilim tarafindan durdurulamazdi.)"""
+        adim = max(1, len(path) // 20)          # ~20 parca
+        for i in range(adim, len(path), adim):
+            if iptal(): return False
+            if not self.movej(path[i], vel=vel): return False
+        if iptal(): return False
+        return self.movej(path[-1], vel=vel)
 
-    # ---- KUVVET KORUMALI INIS (gercekte olmazsa olmaz) ------------------
-    def inis_25N(self, q_high, q_low, oku_kuvvet, esik=25.0, adim=12):
-        """HIGH pozundan LOW pozuna dogru KUCUK adimlarla in; her adimda
-        load cell'i oku. esik'e ulasinca DUR (o an temas saglandi).
-        Simdeki 'sabit z'ye in + 25N bekle' yerine gercekte bu kullanilir —
-        sac esigin gercek yuksekligi tablodakinden farkliysa bile robot
-        bastirmaz, temasta durur.  >50N mini PC acil durumu ayrica bekcidir."""
-        for i in range(1, adim + 1):
-            a = i / adim
-            q = [h + (l - h) * a for h, l in zip(q_high[:6], q_low[:6])]
-            if not self.movej(q, vel=VEL_CREEP, acc=ACC_CREEP):
+    # ── surunme: nokta listesi, her noktaya sabit surede (1cm/5sn kurali) ─
+    def surun_noktalar(self, noktalar, sn_per_nokta, iptal):
+        for q in noktalar:
+            if iptal(): return False
+            if not self.movej(q, vel=VEL_INIS, acc=ACC_INIS,
+                              t=max(sn_per_nokta, 0.3)):
                 return False
-            f = oku_kuvvet()
-            if f >= esik:
-                return True                          # temas — inisi bitir
-        return oku_kuvvet() >= esik                  # tabana indik: temas var mi?
-
-    # ---- 1cm/5sn surunme zimpara ----------------------------------------
-    def surun(self, low_tablosu, y0, y1, oku_acil, hiz_mps=0.002):
-        """LOW tablosu uzerinde y0->y1 pozlarini sirayla gez; her adimda
-        adim_mesafesi/hiz kadar sure ver (t parametresi) => 2mm/s = 1cm/5sn."""
-        yol = [p for p in low_tablosu if min(y0, y1) - 1e-6 <= p['y'] <= max(y0, y1) + 1e-6]
-        yol.sort(key=lambda p: p['y'], reverse=(y1 < y0))
-        onceki_y = y0
-        for p in yol:
-            if oku_acil():
-                return False
-            dt = abs(p['y'] - onceki_y) / hiz_mps
-            if not self.movej(p['q'], vel=VEL_CREEP, acc=ACC_CREEP, t=max(dt, 0.5)):
-                return False
-            onceki_y = p['y']
         return True
 
-
-# =========================================================================
-# ENTEGRASYON NOTU — akilli_dinleyici.py'de degisecek yerler (kol basinda):
-#   USE_REAL = True ise:
-#     kol = RealKol(n)
-#     play_path(T['park_to_scan'])  -> kol.play_path(...)
-#     move_seg(a, b, sure)          -> kol.movej(b)
-#     inis + bekle_25N ikilisi      -> kol.inis_25N(q_high, q_low, lambda: state['force'])
-#         (bekle_25N yine cagrilabilir: inis_25N zaten temasla dondugu icin
-#          band kontrolu 25-50N'i aninda gecer)
-#     surunme glide(...)            -> kol.surun(LOW, ya, y_end, lambda: state['emergency'])
-#     to_park()                     -> kol.play_path(ters park_to_scan)
-#   Zimpara rolesi/servo/log AYNEN kalir (mini PC'ye gidiyor, degismez).
-#   ACIL DURUM: state['emergency'] True olunca hicbir yeni movej gonderilmez;
-#   ayrica Doosan'in kendi koruma durdurmasi ve fiziksel e-stop her zaman ustundur.
-# =========================================================================
+    # ── asamali inis (5+5cm) — kuvvet callback'iyle ──────────────────────
+    def inis_asamali(self, poz_fn, dara_fn, kuvvet_fn, iptal, log,
+                     esik=25.0, tepki=10.0):
+        """poz_fn(a): a karisim derinligindeki eklem pozu (0=HIGH,1=LOW,>1 alt)
+        Donus: ('TEMAS'|'BOS'|'IPTAL', a)"""
+        a_ust, a_alt = None, None   # sinifin disindan gecirilecek — basitlik icin sabit oranlar:
+        a_ust = 1 - 0.05 / 0.151
+        a_alt = 1 + 0.05 / 0.151
+        if not self.movej(poz_fn(a_ust), vel=VEL_TASIMA): return ('IPTAL', a_ust)
+        dara = dara_fn()
+        log(f'gercek inis: dara={dara:.1f}, kuvvet izlenerek iniliyor')
+        def kademe(a0, a1, n=10):
+            for k in range(1, n + 1):
+                if iptal(): return ('IPTAL', a0)
+                a = a0 + (a1 - a0) * k / n
+                if not self.movej(poz_fn(a), vel=VEL_INIS, acc=ACC_INIS):
+                    return ('IPTAL', a)
+                d = kuvvet_fn() - dara
+                if d >= esik:
+                    log(f'TEMAS ✓ net +{d:.1f}N (a={a:.2f})')
+                    return ('TEMAS', a)
+            return None
+        r = kademe(a_ust, 1.0)
+        if r: return r
+        d = kuvvet_fn() - dara
+        if d >= tepki:
+            r = kademe(1.0, a_alt)
+            if r: return r
+            d = kuvvet_fn() - dara
+            return (('TEMAS' if d >= tepki else 'BOS'), a_alt)
+        log('5cm tepkisiz — +5cm daha')
+        r = kademe(1.0, a_alt)
+        if r: return r
+        d = kuvvet_fn() - dara
+        return (('TEMAS' if d >= tepki else 'BOS'), a_alt)

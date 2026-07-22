@@ -46,8 +46,8 @@ def generate_launch_description():
     args = [
         DeclareLaunchArgument('robot_ip', default_value='192.168.1.100',
                               description='Firmanin verdigi robot kontrolcu IP adresi'),
-        DeclareLaunchArgument('rt_host',  default_value='192.168.137.50',
-                              description='Doosan gercek-zaman (RT) kanali IP (varsayilan degismez)'),
+        DeclareLaunchArgument('rt_host',  default_value=LaunchConfiguration('robot_ip'),
+                              description='RT kanali IP — verilmezse robot_ip kullanilir (tek IP yeter)'),
         DeclareLaunchArgument('model',    default_value='h2515',
                               description='Robot modeli (bu proje: h2515)'),
         DeclareLaunchArgument('name',     default_value='dsr01',
@@ -97,14 +97,12 @@ def generate_launch_description():
     gorev_beyni = TimerAction(
         period=8.0,
         actions=[
-            LogInfo(msg='>>> Doosan baglantisi bekleniyor bitti — GOREV BEYNI baslıyor'),
-            Node(
-                package='end_effector_ros2', executable='akilli_dinleyici',
-                name='akilli_dinleyici', output='screen',
-                parameters=[{
-                    'use_real_robot': True,     # <<< Gazebo yerine real_kol_surucu
-                    'robot_namespace': name,
-                }],
+            LogInfo(msg='>>> Doosan baglantisi tamam — GOREV BEYNI baslıyor'),
+            ExecuteProcess(
+                cmd=['python3', '-u',
+                     os.path.expanduser('~/ros2-end-effector/akilli_dinleyici.py')],
+                output='screen',
+                additional_env={'GERCEK_ROBOT': '1'},   # <<< gercek mod anahtari
             ),
         ],
     )
