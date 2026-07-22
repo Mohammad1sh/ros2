@@ -29,6 +29,7 @@ from launch.actions import (
     LogInfo, GroupAction, ExecuteProcess
 )
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -54,6 +55,9 @@ def generate_launch_description():
                               description='ROS ad alani (namespace)'),
         DeclareLaunchArgument('mode',     default_value='real',
                               description="real=gercek robot | virtual=Doosan EMULATORU (Docker) — sahasiz test"),
+        DeclareLaunchArgument('sensorler', default_value='true',
+                              description="true=vision+can dugumlerini de baslat | false=minipc_baslat.sh"
+                                          " zaten calistiriyorsa (cift dugum olmasin)"),
     ]
 
     # ── 1) DOOSAN RESMI SURUCUSU — REAL modda IP'ye baglanir ──────────────
@@ -86,11 +90,13 @@ def generate_launch_description():
         package='end_effector_ros2', executable='vision_node',
         name='vision_node', output='screen',
         parameters=[{'simulation': False}],      # TODO: gercek kamera cihaz idx
+        condition=IfCondition(LaunchConfiguration('sensorler')),
     )
     can_node = Node(
         package='end_effector_ros2', executable='can_node',
         name='can_node', output='screen',
         parameters=[{'simulation': False}],      # TODO: gercek CAN/load cell portu
+        condition=IfCondition(LaunchConfiguration('sensorler')),
     )
 
     # ── 3+4) GOREV BEYNI (gercek surucu adaptoruyle) ──────────────────────
