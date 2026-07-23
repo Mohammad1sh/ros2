@@ -12,6 +12,10 @@ Doosan'in resmi DRCF emulatorunde uctan uca test edildi (bkz. EMULATOR_TEST.md):
 - [x] Asamali inis (5+5cm) + 25N mantigi + dara alma Doosan protokolunde kosuyor
 - [x] TAM GOREV: mini PC arayuzundeki GERCEK START butonu -> tarama -> tespit ->
       inis -> temas -> role ACIK zimpara -> kalkis -> park (RViz'de izlendi)
+- [x] MINI PC UZERINDE PROVA (2026-07-23, laptopsuz): GUI START -> tarama ->
+      kamera kapagi GERCEK servoyla acildi/kapandi ({"camera"} semasi fiziksel
+      dogrulandi) -> tespit yok -> guvenli park; role hic acilmadi, watchdog sessiz
+- [x] ROLE WATCHDOG tezgahta olculdu: yayin kesilince 12.0 sn'de otomatik SANDER_OFF
 
 ## 00. SAHA KURULUMU
 Mini PC'de zaten var: ros2-end-effector calisma alani, vision/can/logic/GUI.
