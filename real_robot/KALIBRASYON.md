@@ -18,7 +18,8 @@ Mini PC'de zaten var: ros2-end-effector calisma alani, vision/can/logic/GUI.
 
 SAHADA CALISTIRMA (iki pencere):
 1. `~/minipc_baslat.sh`  (GUI + vision + can + logic — bugunku gibi; zenoh bos calisir, zarari yok)
-2. `ros2 launch end_effector_ros2 gercek_robot.launch.py robot_ip:=<FIRMANIN_IP> sensorler:=false`
+2. `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ros2 launch end_effector_ros2 gercek_robot.launch.py robot_ip:=<FIRMANIN_IP> sensorler:=false`
+   (RMW on eki SART: mini PC yigini cyclonedds'te — minipc_baslat.sh:17; ayni RMW olmazsa beyin dugumleri goremez)
    (`sensorler:=false` SART: vision/can'i minipc_baslat zaten acti — cift dugum olmasin.
     Beyin GERCEK_ROBOT=1 ile launch icinden kalkar; her sey yerel DDS.)
 
@@ -27,7 +28,7 @@ TEK CALISTIRMA KOMUTU launch'tir — real_kol_surucu.py ELLE CALISTIRILMAZ,
 beyin onu kendi icinde otomatik kullanir. (Toplantida istenen "tek launch" bu.)
 - [ ] Doosan kontrolcu IP: ________ (firma verecek)
 - [ ] Mini PC ayni agda, ping atiyor
-- [ ] `ros2 launch end_effector_ros2 gercek_robot.launch.py robot_ip:=<IP> sensorler:=false`
+- [ ] `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ros2 launch end_effector_ros2 gercek_robot.launch.py robot_ip:=<IP> sensorler:=false`
 - [ ] Poz akisi test: ikinci terminalde `ros2 topic hz /dsr01/joint_states` -> ~100Hz
 - [ ] JOG testi: "jog" = Doosan'in EL KUMANDASI (teach pendant/tablet) uzerindeki
       yon tuslariyla kolu elle oynatmak. Kumandayla kolu oynatirken ikinci
