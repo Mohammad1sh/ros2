@@ -21,6 +21,8 @@ GERCEK = os.environ.get('GERCEK_ROBOT', '0') == '1'
 
 WS = os.path.expanduser('~/ros2-end-effector')
 T = json.load(open(os.path.join(WS, 'poz_tablosu.json')))
+sys.path.insert(0, WS)
+import kumeleme              # kutu-bazli capak eslestirme (saf modul, birim testli)
 
 # ── Ayarlar ──
 FRAME_W      = 1280          # vision_node kare genisligi (px)
@@ -47,6 +49,7 @@ pub_z = n.create_publisher(Float64MultiArray, '/gz/zimpara_velocity_controller/c
 pub_servo  = n.create_publisher(String, '/end_effector/servo_command', 10)   # kamera kutusu
 pub_sander = n.create_publisher(String, '/end_effector/sander_only', 10)     # gercek role
 pub_log    = n.create_publisher(String, '/end_effector/log', 10)             # mini PC GUI log paneli
+pub_regions = n.create_publisher(String, '/end_effector/regions', 10)        # GUI canli maske (aday/kesin/bolge)
 
 def log_gui(msg):
     print(msg, flush=True)
@@ -67,6 +70,13 @@ def gercek_zimpara(acik):
 FORCE_N      = 25.0          # zimpara baslama sarti (gercek load cell, Newton)
 FORCE_WAIT_S = 120.0         # 25N bekleme ust siniri (sim-sn); dolarsa uyariyla devam
 DISK_R       = 0.05          # disk yaricapi (kumeleme icin)
+# ── TESPIT ESLESTIRME AYARLARI (kullanici tasarimi 2026-07-23 — kolay degisir) ──
+KALICILIK_ORAN  = 0.25       # capak, penceredeki karelerin bu ORANINDA gorulmeli
+                             # (orn. 15 kare x 0.25 = 4 kare; ardisik olmasi GEREKMEZ)
+MIN_GOZLEM      = 3          # ...ama her durumda en az bu kadar karede
+KUTU_BUYUTME    = 0.30       # ayni-capak kurali: kutu bu oranla buyutulur,
+                             # yeni tespitin MERKEZI icine dusuyorsa ayni capak
+VARSAYILAN_KUTU = 53.0       # px — eski {'x'} semasi kutu boyutu gondermezse
 MIN_PAS      = 0.05          # tek capak bile en az 5 cm zimparalanir (25 sn)
 
 state = {'emergency': False, 'stop': False, 'start': False, 'dets': [],
@@ -531,51 +541,83 @@ def glide_blend(y0, y1, a, speed, spin=0.0, wall=False):
         if p >= 1.0: return True
         rclpy.spin_once(n, timeout_sec=0.01); time.sleep(0.01)
 
-def cluster(dets):
-    """Kare-tespitleri -> CAPAK NOKTALARI -> bolgeler.
-    1) Her karedeki kutular metreye eslenir; harita DISINA dusenler COPE atilir
-       (eskiden uclara yapistiriliyordu -> bolgeler boydan boya sisiyordu).
-    2) 3cm toleransla 1D gruplama + KALICILIK filtresi (yeterince karede
-       gorulmeyen hayaletler elenir) -> her capagin MEDYAN konumu = 1 nokta.
-    3) Noktalar arasi bosluk <= GAP_M (disk capi) ise ayni iniste taranir;
-       buyukse KALK-GEC (in-zimpara-kalk). Disk MERKEZI ilk noktaya iner,
-       son noktaya kadar gider.
-    Donus: (bolgeler[(y0,y1)], noktalar[(y, px)])"""
-    hepsi = []                               # (y, px)
-    for frame in dets:
-        for b in frame:
-            dy = (b['x'] - FRAME_W / 2) * PX2M * AXIS_SIGN
-            y = SCAN_Y + dy
-            if Y_MIN - 0.02 <= y <= Y_MAX + 0.02:
-                hepsi.append((min(max(y, Y_MIN), Y_MAX), float(b['x'])))
-    if not hepsi:
-        return [], []
-    hepsi.sort()
-    # -- 1D gruplama (3cm) --
-    gruplar = [[hepsi[0]]]
-    for y, px in hepsi[1:]:
-        if y - gruplar[-1][-1][0] <= 0.03:
-            gruplar[-1].append((y, px))
+def _bolgeler_birlestir(ys):
+    """Sirali y listesi -> bolgeler: bosluk <= GAP_M (disk capi) ayni iniste.
+    (METRIK kalan tek kural — disk capi fiziksel sabittir.)"""
+    if not ys:
+        return []
+    b = [[ys[0], ys[0]]]
+    for y in ys[1:]:
+        if y - b[-1][1] <= GAP_M:
+            b[-1][1] = y
         else:
-            gruplar.append([(y, px)])
-    # -- kalicilik: en az 3 gozlem (veya kare sayisinin 1/5'i) --
-    esik = max(3, len(dets) // 5)
+            b.append([y, y])
+    return [(a, c) for a, c in b]
+
+
+def _px_to_y(cx):
+    return SCAN_Y + (cx - FRAME_W / 2) * PX2M * AXIS_SIGN
+
+
+def _regions_yayinla(son=False):
+    """GUI canli maskesi: aday (esik alti, soluk) + kesin capaklar + bolge
+    seritleri. Pencere SIRASINDA ~0.5sn'de bir, sonunda 'kesin' olarak yayinlanir."""
+    dets = state['dets']
+    kumeler = kumeleme.kumele(dets, KUTU_BUYUTME, VARSAYILAN_KUTU)
+    esik = max(MIN_GOZLEM, int(round(len(dets) * KALICILIK_ORAN)))
+    adaylar, kesin, ys = [], [], []
+    for k in kumeler:
+        y = _px_to_y(k['cx'])
+        rec = {'x': round(k['cx'], 1), 'y': round(k['cy'], 1),
+               'w': round(k['w'], 1), 'h': round(k['h'], 1), 'n': k['n']}
+        if k['n'] >= esik and (Y_MIN - 0.02) <= y <= (Y_MAX + 0.02):
+            kesin.append(rec)
+            ys.append(min(max(y, Y_MIN), Y_MAX))
+        else:
+            adaylar.append(rec)
+    ys.sort()
+    bolgeler = _bolgeler_birlestir(ys)
+    bpx = []
+    for a, b in bolgeler:
+        xa = FRAME_W / 2 + (a - SCAN_Y) / (PX2M * AXIS_SIGN)
+        xb = FRAME_W / 2 + (b - SCAN_Y) / (PX2M * AXIS_SIGN)
+        bpx.append([round(min(xa, xb), 1), round(max(xa, xb), 1)])
+    pub_regions.publish(String(data=json.dumps({
+        'tip': 'kesin' if son else 'onizleme',
+        'kare': len(dets), 'esik': esik,
+        'adaylar': adaylar[:30], 'capaklar': kesin,
+        'bolgeler_px': bpx,
+        'bolgeler_m': [[round(a, 3), round(b, 3)] for a, b in bolgeler]})))
+
+
+def cluster(dets):
+    """Kare-tespitleri -> CAPAKLAR -> bolgeler.  (v2 — KUTU-BAZLI eslesme)
+    1) Kimlik: kumeleme.kumele — yeni tespitin merkezi, kumenin %KUTU_BUYUTME
+       buyutulmus MEDYAN kutusuna dusuyorsa ayni capak (sabit cm YOK).
+    2) Kalicilik: karelerin KALICILIK_ORAN'inda (>= MIN_GOZLEM) gorulme sarti;
+       kareler ardisik olmak zorunda degil. Harita disina dusenler cope.
+    3) Bolge: capaklar arasi bosluk <= GAP_M (disk capi) ayni iniste taranir.
+    Donus: (bolgeler[(y0,y1)], noktalar[(y, px)])"""
+    kumeler = kumeleme.kumele(dets, KUTU_BUYUTME, VARSAYILAN_KUTU)
+    esik = max(MIN_GOZLEM, int(round(len(dets) * KALICILIK_ORAN)))
     noktalar = []
-    for g in gruplar:
-        if len(g) >= esik:
-            g_y  = sorted(v[0] for v in g)
-            g_px = sorted(v[1] for v in g)
-            noktalar.append((g_y[len(g_y)//2], g_px[len(g_px)//2]))
+    for i, k in enumerate(kumeler):
+        y = _px_to_y(k['cx'])
+        icerde = (Y_MIN - 0.02) <= y <= (Y_MAX + 0.02)
+        gecti = k['n'] >= esik and icerde
+        if i < 12:                                  # teshis dokumu (sinirli)
+            durum = 'CAPAK ✓' if gecti else ('harita-disi' if not icerde else 'elendi')
+            log_gui(f"  kume: x={k['cx']:.0f}px kutu={k['w']:.0f}x{k['h']:.0f} "
+                    f"gozlem={k['n']}/{esik} -> {durum}")
+        if gecti:
+            noktalar.append((min(max(y, Y_MIN), Y_MAX), float(k['cx'])))
+    if len(kumeler) > 12:
+        log_gui(f'  (+{len(kumeler)-12} kume daha)')
     if not noktalar:
         return [], []
-    # -- noktalardan bolgeler: bosluk > GAP_M ise ayri inis --
-    bolgeler = [[noktalar[0][0], noktalar[0][0]]]
-    for y, _ in noktalar[1:]:
-        if y - bolgeler[-1][1] <= GAP_M:
-            bolgeler[-1][1] = y
-        else:
-            bolgeler.append([y, y])
-    return [(a, b) for a, b in bolgeler], noktalar
+    noktalar.sort()
+    bolgeler = _bolgeler_birlestir([y for y, _ in noktalar])
+    return bolgeler, noktalar
 
 print('╔════════════════════════════════════════════════╗')
 print('║ AKILLI DINLEYICI HAZIR — mini PC\'de START\'a bas ║')
@@ -618,10 +660,13 @@ while rclpy.ok():
 
     log_gui(f'Kamera penceresi: {CAM_WINDOW_S:.0f} sn gercek tespit toplaniyor...')
     state['dets'] = []                  # pencere oncesi kareleri sayma
-    t0 = time.time()
+    t0 = time.time(); son_oniz = 0.0
     while time.time() - t0 < CAM_WINDOW_S:
         if iptal(): break
         send(T['scan'])
+        if time.time() - son_oniz >= 0.5:   # CANLI maske: ara-kumeleme -> GUI
+            _regions_yayinla(son=False)
+            son_oniz = time.time()
         rclpy.spin_once(n, timeout_sec=0.05)
 
     log_gui('Kamera kutusu kapaniyor...')
@@ -636,7 +681,8 @@ while rclpy.ok():
         continue
 
     bolgeler, noktalar = cluster(state['dets'])
-    log_gui(f'{sum(len(f) for f in state["dets"])} kare-tespit -> '
+    _regions_yayinla(son=True)          # GUI maskesi: kesinlesmis hal
+    log_gui(f'{len(state["dets"])} karede {sum(len(f) for f in state["dets"])} tespit -> '
             f'{len(noktalar)} capak noktasi -> {len(bolgeler)} bolge')
     for y, px in noktalar:
         log_gui(f'  capak: goruntu x={px:.0f}px (%{100*px/FRAME_W:.0f}) -> y={y:+.3f} m')
