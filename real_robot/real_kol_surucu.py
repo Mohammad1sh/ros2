@@ -63,9 +63,12 @@ class RealKol:
         return self.movej(path[-1], vel=vel)
 
     # ── surunme: nokta listesi, her noktaya sabit surede (1cm/5sn kurali) ─
-    def surun_noktalar(self, noktalar, sn_per_nokta, iptal):
+    def surun_noktalar(self, noktalar, sn_per_nokta, iptal, kalp=None):
+        """kalp: her noktada cagrilan istege bagli geri-cagri (ornek: role
+        tazeleme kalp atisi — mini PC watchdog'u icin). None ise etkisiz."""
         for q in noktalar:
             if iptal(): return False
+            if kalp: kalp()
             if not self.movej(q, vel=VEL_INIS, acc=ACC_INIS,
                               t=max(sn_per_nokta, 0.3)):
                 return False

@@ -502,8 +502,11 @@ def glide_blend(y0, y1, a, speed, spin=0.0, wall=False):
         npts = max(1, int(abs(y1 - y0) / adim))
         ys = [y0 + (y1 - y0) * k / npts for k in range(npts + 1)]
         state['y_son'] = y1
+        # kalp: zimpara surerken roleyi ~4sn'de bir TAZELE (mini PC watchdog'u
+        # 12sn tazeleme gormezse otomatik keser — beyin olurse role acik kalmaz)
         return kol.surun_noktalar([karisim(y, a) for y in ys],
-                                  adim / max(speed, 1e-6), iptal)
+                                  adim / max(speed, 1e-6), iptal,
+                                  kalp=lambda: gercek_zimpara(True))
     """TEMASIN OLDUGU derinlikte (a) y0->y1 surun. Eskiden zimpara her zaman
     LOW seviyesine zorlanirdi; temas LOW'un ustunde olustuysa bu ANI DALIS
     demekti (sasiye/yere carpmanin ikinci kaynagi)."""
