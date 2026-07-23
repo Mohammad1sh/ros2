@@ -24,7 +24,8 @@ T = json.load(open(os.path.join(WS, 'poz_tablosu.json')))
 
 # ── Ayarlar ──
 FRAME_W      = 1280          # vision_node kare genisligi (px)
-VIEW_W_M     = 0.90          # 25cm yukseklikte gorus genisligi (m)
+VIEW_W_M     = 0.72          # 25cm yukseklikte gorus genisligi (m) — TEZGAHTA OLCULDU
+                             # (2026-07-23, metreyle ~72cm; eski 0.90 varsayimdi)
 PX2M         = VIEW_W_M / FRAME_W
 AXIS_SIGN    = -1.0          # goruntu-x -> robot-y isareti (gerekirse +1 yap)
 SCAN_Y       = -0.100        # tarama pozunun y'si (yeni esik hattinin merkezi)
