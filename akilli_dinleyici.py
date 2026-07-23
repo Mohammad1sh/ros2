@@ -52,9 +52,12 @@ def log_gui(msg):
     pub_log.publish(String(data=f'[KOL] {msg}'))
 
 def kamera_kutusu(acik):
-    """kamera kutusu — GERCEK servo + SIM kapagi (7. eksen) birlikte hareket eder"""
-    s = 35 if acik else 160
-    pub_servo.publish(String(data=json.dumps({'s1': s, 's2': s, 'sander': 222})))
+    """kamera kutusu — GERCEK servo + SIM kapagi (7. eksen) birlikte hareket eder.
+    SEMA: mini PC can_node'un ONCELIKLI ve fiilen test edilmis formati
+    {'camera': metre} (>0.01 = AC). Eski {'s1','s2'} semasi kodda kabul
+    goruluyordu ama tezgahta kapagi FIZIKSEL acmadigi gozlendi (2026-07-22)."""
+    pub_servo.publish(String(data=json.dumps(
+        {'camera': 0.025 if acik else 0.0, 'sander': 222})))
     state['kutu_sim'] = 0.025 if acik else 0.0
 
 def gercek_zimpara(acik):
