@@ -442,7 +442,7 @@ def asamali_inis(etiket, ya):
             rclpy.spin_once(n, timeout_sec=0.02); return state['force']
         return kol.inis_asamali(lambda a: karisim(ya, a), dara_al, kuvvet,
                                 iptal, lambda m: log_gui(f'{etiket}: {m}'),
-                                esik=FORCE_N, tepki=10.0)
+                                esik=FORCE_N, tepki=10.0, span=SPAN)
     a_ust = 1 - 0.05 / SPAN            # LOW'un 5cm ustu
     a_alt = 1 + 0.05 / SPAN            # LOW'un 5cm alti
     hedef = karisim(ya, a_ust)

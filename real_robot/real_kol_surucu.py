@@ -73,12 +73,13 @@ class RealKol:
 
     # ── asamali inis (5+5cm) — kuvvet callback'iyle ──────────────────────
     def inis_asamali(self, poz_fn, dara_fn, kuvvet_fn, iptal, log,
-                     esik=25.0, tepki=10.0):
+                     esik=25.0, tepki=10.0, span=0.151):
         """poz_fn(a): a karisim derinligindeki eklem pozu (0=HIGH,1=LOW,>1 alt)
+        span: HIGH-LOW dusey araligi (m) — beyin kendi SPAN'ini gecirir (TEK KAYNAK;
+              tablolar farkli aralikla uretilirse '5cm' orani otomatik dogru kalir)
         Donus: ('TEMAS'|'BOS'|'IPTAL', a)"""
-        a_ust, a_alt = None, None   # sinifin disindan gecirilecek — basitlik icin sabit oranlar:
-        a_ust = 1 - 0.05 / 0.151
-        a_alt = 1 + 0.05 / 0.151
+        a_ust = 1 - 0.05 / span
+        a_alt = 1 + 0.05 / span
         if not self.movej(poz_fn(a_ust), vel=VEL_TASIMA): return ('IPTAL', a_ust)
         dara = dara_fn()
         log(f'gercek inis: dara={dara:.1f}, kuvvet izlenerek iniliyor')
