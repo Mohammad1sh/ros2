@@ -558,8 +558,11 @@ def cluster(dets):
             gruplar[-1].append((y, px))
         else:
             gruplar.append([(y, px)])
-    # -- kalicilik: en az 3 gozlem (veya kare sayisinin 1/5'i) --
-    esik = max(3, len(dets) // 5)
+    # -- kalicilik: en az 3 gozlem (veya kare sayisinin %5'i) --
+    # TEZGAH GOZLEMI (2026-07-23): gercek YOLO kareler arasi titrer; %20 kurali
+    # gercek capaklari eliyordu ("arayuz goruyor, log 0 capak"). Hayalet korumasi
+    # uc katman: >=3 gozlem + 3cm kumeleme + kaynakta conf filtresi (GUI).
+    esik = max(3, len(dets) // 20)
     noktalar = []
     for g in gruplar:
         if len(g) >= esik:
